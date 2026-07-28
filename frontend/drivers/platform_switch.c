@@ -231,13 +231,18 @@ static void frontend_switch_get_env(
    logger_init();
 #elif defined(HAVE_FILE_LOGGER)
    retro_main_log_file_init(SD_PREFIX "/retroarch-log.txt");
+#endif
+#endif
+
 #ifdef HAVE_OTLP_LOG_EXPORT
-   /* Opt in only: does nothing unless SD_PREFIX/retroarch/otel-endpoint
-    * exists. Started right after the log file so the two capture the
-    * same records. */
+   /* Deliberately outside the logger ifdef ladder above. HAVE_FILE_LOGGER is
+    * not set for this port, so an earlier version of this nested inside that
+    * branch and therefore never ran at all: the exporter was linked in and
+    * silently never started.
+    *
+    * Opt in only: does nothing unless SD_PREFIX/retroarch/otel-endpoint
+    * exists. */
    otlp_log_exporter_init(SD_PREFIX "/retroarch");
-#endif
-#endif
 #endif
 
    fill_pathname_basedir(g_defaults.dirs[DEFAULT_DIR_PORT], SD_PREFIX "/retroarch/retroarch_switch.nro", sizeof(g_defaults.dirs[DEFAULT_DIR_PORT]));
@@ -328,9 +333,22 @@ static void frontend_switch_get_env(
 static void frontend_switch_deinit(void *data)
 {
 #ifdef HAVE_OTLP_LOG_EXPORT
-   /* Flush and join before the rest of teardown, while networking is
-    * still up. Nothing here logs: the exporter cannot report on itself
-    * without recursing into the logger it is attached to. */
+   {
+      /* Report before stopping. The exporter cannot report on itself without
+       * recursing into the logger it is attached to, so this is the only
+       * place a silent transport failure becomes visible. */
+      unsigned accepted = 0, sent = 0, dropped = 0, failures = 0;
+      const char *last_error = NULL;
+      otlp_log_exporter_stats(&accepted, &sent, &dropped, &failures,
+            &last_error);
+      if (accepted || sent || dropped || failures)
+         RARCH_LOG("[OTLP] accepted=%u sent=%u dropped=%u failures=%u\n",
+               accepted, sent, dropped, failures);
+      if (last_error && *last_error)
+         RARCH_ERR("[OTLP] last transport error: %s\n", last_error);
+   }
+
+   /* Flush and join before the rest of teardown, while networking is up. */
    otlp_log_exporter_deinit();
 #endif
 
