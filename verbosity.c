@@ -77,6 +77,9 @@
 #endif
 
 #include "verbosity.h"
+#ifdef HAVE_OTLP_LOG_EXPORT
+#include "otlp_log_exporter.h"
+#endif
 #include "file_path_special.h"
 
 #ifdef HAVE_QT
@@ -224,6 +227,23 @@ void retro_main_log_file_deinit(void)
 #if !defined(HAVE_LOGGER)
 void RARCH_LOG_V(const char *tag, const char *fmt, va_list ap)
 {
+#ifdef HAVE_OTLP_LOG_EXPORT
+   /* Formatted here rather than in the exporter so this stays a plain
+    * string interface and does not have to know about varargs. The
+    * enabled() probe keeps the vsnprintf off the hot path when no
+    * endpoint is configured, which is the default. ap is copied because
+    * the platform branches below still need to consume it. */
+   if (otlp_log_exporter_enabled())
+   {
+      char otlp_line[1024];
+      va_list otlp_ap;
+      va_copy(otlp_ap, ap);
+      vsnprintf(otlp_line, sizeof(otlp_line), fmt, otlp_ap);
+      va_end(otlp_ap);
+      otlp_log_exporter_log(tag, otlp_line);
+   }
+#endif
+
 #if defined(_XBOX1) || defined(__WINRT__)
    char buffer[256];
    int _len;

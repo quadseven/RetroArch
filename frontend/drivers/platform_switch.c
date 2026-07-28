@@ -53,6 +53,9 @@
 #include "../../file_path_special.h"
 #include "../../paths.h"
 #include "../../retroarch.h"
+#ifdef HAVE_OTLP_LOG_EXPORT
+#include "../../otlp_log_exporter.h"
+#endif
 #include "../../verbosity.h"
 
 #ifndef IS_SALAMANDER
@@ -228,6 +231,12 @@ static void frontend_switch_get_env(
    logger_init();
 #elif defined(HAVE_FILE_LOGGER)
    retro_main_log_file_init(SD_PREFIX "/retroarch-log.txt");
+#ifdef HAVE_OTLP_LOG_EXPORT
+   /* Opt in only: does nothing unless SD_PREFIX/retroarch/otel-endpoint
+    * exists. Started right after the log file so the two capture the
+    * same records. */
+   otlp_log_exporter_init(SD_PREFIX "/retroarch");
+#endif
 #endif
 #endif
 
@@ -318,6 +327,13 @@ static void frontend_switch_get_env(
 
 static void frontend_switch_deinit(void *data)
 {
+#ifdef HAVE_OTLP_LOG_EXPORT
+   /* Flush and join before the rest of teardown, while networking is
+    * still up. Nothing here logs: the exporter cannot report on itself
+    * without recursing into the logger it is attached to. */
+   otlp_log_exporter_deinit();
+#endif
+
    (void)data;
 
 #ifdef HAVE_LIBNX

@@ -59,6 +59,9 @@ HAVE_RMODTRACKER = 1
 HAVE_CORE_INFO_CACHE = 1
 HAVE_CLOUDSYNC = 1
 HAVE_SSL = 1
+# OTLP log export. Uses net_http and rthreads only, both already built
+# for this port, so it adds no new dependency.
+HAVE_OTLP_LOG_EXPORT = 1
 
 # RetroArch libnx useful flags
 HAVE_THREADS = 1
