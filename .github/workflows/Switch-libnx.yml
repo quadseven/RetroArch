@@ -35,3 +35,11 @@ jobs:
         name: RA-libnx-dummy-${{ steps.slug.outputs.sha8 }}
         path: |
           retroarch_switch.nro
+
+    # Without this a crash report gives an address and no way to resolve it.
+    # The build id in the report is what matches a crash to this exact elf.
+    - uses: actions/upload-artifact@v4
+      with:
+        name: RA-libnx-elf-${{ steps.slug.outputs.sha8 }}
+        path: |
+          retroarch_switch.elf
