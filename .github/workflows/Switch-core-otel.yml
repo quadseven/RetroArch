@@ -1,0 +1,160 @@
+name: CI Switch core with OTLP
+
+# The Switch build produces two very different binaries from this same tree.
+#
+#   HAVE_STATIC_DUMMY=1  ->  retroarch_switch.nro, the salamander launcher
+#   (no flag)            ->  <core>_libretro_libnx.nro, RetroArch statically
+#                            linked against libretro_libnx.a
+#
+# Picking a game makes the launcher exec the second binary and exit, so a
+# launcher-only build reports its own startup and then goes quiet for the
+# entire time a game is actually running. Instrumenting gameplay means
+# building the core NRO from this fork rather than taking the prebuilt one
+# from the libretro buildbot, which has no exporter in it.
+#
+# The buildbot publishes only finished .nro files, no .a, so the core has to
+# be compiled from source here and handed to the RetroArch link step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      core:
+        description: "Core to build"
+        required: true
+        default: mgba
+        type: choice
+        options: [mgba, ppsspp, mupen64plus_next]
+
+permissions:
+  contents: read
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+      options: --user root
+
+    steps:
+      - name: Checkout RetroArch (this fork, with the exporter)
+        uses: actions/checkout@v4
+        with:
+          path: retroarch
+
+      - name: Resolve core details
+        id: core
+        # Passed through env rather than interpolated into the shell. The
+        # choice type already constrains this to the three options above, but
+        # workflow inputs do not belong in a run: body regardless.
+        env:
+          CORE: ${{ inputs.core }}
+        run: |
+          case "$CORE" in
+            mgba)
+              echo "repo=https://github.com/libretro/mgba" >> "$GITHUB_OUTPUT"
+              echo "makefile=Makefile.libretro" >> "$GITHUB_OUTPUT"
+              echo "submodules=false" >> "$GITHUB_OUTPUT"
+              ;;
+            ppsspp)
+              echo "repo=https://github.com/hrydgard/ppsspp" >> "$GITHUB_OUTPUT"
+              echo "makefile=libretro/Makefile" >> "$GITHUB_OUTPUT"
+              echo "submodules=true" >> "$GITHUB_OUTPUT"
+              ;;
+            mupen64plus_next)
+              echo "repo=https://github.com/libretro/mupen64plus-libretro-nx" >> "$GITHUB_OUTPUT"
+              echo "makefile=Makefile" >> "$GITHUB_OUTPUT"
+              echo "submodules=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Install port libraries
+        # pkg.devkitpro.org intermittently answers 403 on the database sync,
+        # which fails a build that has nothing wrong with it.
+        run: |
+          for attempt in 1 2 3 4 5; do
+            dkp-pacman --noconfirm -Sy switch-dev switch-portlibs && exit 0
+            echo "attempt ${attempt} failed"; sleep $(( attempt * 20 ))
+          done
+          echo "package install failed"; exit 1
+
+      - name: Clone the core
+        env:
+          REPO: ${{ steps.core.outputs.repo }}
+          SUBMODULES: ${{ steps.core.outputs.submodules }}
+        run: |
+          if [ "$SUBMODULES" = "true" ]; then
+            git clone --depth 1 --recursive "$REPO" core
+          else
+            git clone --depth 1 "$REPO" core
+          fi
+          echo "core checked out at $(git -C core rev-parse --short HEAD)"
+
+      - name: Build the core as a static library
+        working-directory: core
+        env:
+          MAKEFILE: ${{ steps.core.outputs.makefile }}
+        run: |
+          make -f "$MAKEFILE" platform=libnx -j"$(getconf _NPROCESSORS_ONLN)"
+          echo "--- static libraries produced ---"
+          find . -name "*.a" -size +100k | head
+
+      - name: Hand the core to the RetroArch link step
+        run: |
+          A=$(find core -name "*_libretro_libnx.a" | head -1)
+          [ -n "$A" ] || A=$(find core -name "*.a" -size +100k | head -1)
+          [ -n "$A" ] || { echo "no static library found"; exit 1; }
+          echo "using $A"
+          cp "$A" retroarch/libretro_libnx.a
+
+      - name: Build the instrumented core NRO
+        working-directory: retroarch
+        # No HAVE_STATIC_DUMMY here: that is what makes the build link
+        # libretro_libnx.a and produce a core rather than the launcher.
+        env:
+          CORE: ${{ inputs.core }}
+        run: |
+          make -f Makefile.libnx -j"$(getconf _NPROCESSORS_ONLN)" \
+            TARGET="${CORE}_libretro_libnx"
+          ls -la ./*.nro ./*.elf
+
+      - name: Confirm the exporter is actually in the binary
+        working-directory: retroarch
+        # A core NRO that silently lacks the exporter looks identical to one
+        # that has it until it ships nothing, which is the failure this whole
+        # workflow exists to avoid.
+        env:
+          CORE: ${{ inputs.core }}
+        run: |
+          NRO="${CORE}_libretro_libnx.nro"
+          for s in "otel-status.txt" "otel-endpoint" "started, endpoint=%s"; do
+            if strings -a "$NRO" | grep -qF "$s"; then
+              echo "ok      $s"
+            else
+              echo "MISSING $s"; exit 1
+            fi
+          done
+          python3 - "$NRO" <<'PY'
+          import sys
+          blob = open(sys.argv[1], 'rb').read()
+          needle = b"Content-Type: application/json"
+          i = blob.find(needle)
+          if i < 0:
+              sys.exit("header string absent")
+          tail = blob[i + len(needle):i + len(needle) + 2]
+          if tail != b"\r\n":
+              sys.exit("header not CRLF terminated: %r" % tail)
+          print("ok      request headers are CRLF terminated")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.core }}-otel-nro
+          path: retroarch/${{ inputs.core }}_libretro_libnx.nro
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.core }}-otel-elf
+          path: retroarch/${{ inputs.core }}_libretro_libnx.elf
