@@ -388,9 +388,18 @@ bool otlp_log_exporter_init(const char *config_dir)
 
    memset(&otlp_st, 0, sizeof(otlp_st));
 
+   /* Recorded before anything can fail, because otlp_write_status builds its
+    * path from it. Set later and every early return below is silent, which
+    * makes the most likely failure the one that reports nothing at all. */
+   strlcpy(otlp_st.config_dir, config_dir, sizeof(otlp_st.config_dir));
+
    otlp_read_first_line(config_dir, "otel-endpoint", endpoint, sizeof(endpoint));
    if (string_is_empty(endpoint))
+   {
+      otlp_write_status("stopped: no endpoint. Expected a url on the first"
+            " line of %s/otel-endpoint", config_dir);
       return false;
+   }
 
    /* OTEL_EXPORTER_OTLP_ENDPOINT is a base that the signal path is appended
     * to. Accept a full logs url too, so either form works. */
@@ -442,20 +451,30 @@ bool otlp_log_exporter_init(const char *config_dir)
 
    if (!(otlp_st.records = (otlp_record_t*)calloc(OTLP_MAX_RECORDS,
                sizeof(otlp_record_t))))
+   {
+      otlp_write_status("stopped: out of memory for %u records",
+            (unsigned)OTLP_MAX_RECORDS);
       return false;
+   }
 
    if (!(otlp_st.lock = slock_new()))
+   {
+      otlp_write_status("stopped: slock_new failed");
       goto error;
+   }
    if (!(otlp_st.cond = scond_new()))
+   {
+      otlp_write_status("stopped: scond_new failed");
       goto error;
+   }
 
-   strlcpy(otlp_st.config_dir, config_dir, sizeof(otlp_st.config_dir));
    otlp_st.running = true;
    otlp_write_status("started, endpoint=%s", otlp_st.url);
 
    if (!(otlp_st.thread = sthread_create(otlp_worker, NULL)))
    {
       otlp_st.running = false;
+      otlp_write_status("stopped: could not start the sender thread");
       goto error;
    }
 
