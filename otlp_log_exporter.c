@@ -425,7 +425,16 @@ bool otlp_log_exporter_init(const char *config_dir)
       char *p;
 
       otlp_read_first_line(config_dir, "otel-headers", raw, sizeof(raw));
-      strlcpy(otlp_st.headers, "Content-Type: application/json",
+
+      /* Every line here, including the last, has to end in CRLF. net_http
+       * sends this block verbatim and then appends Content-Length itself, so
+       * a missing terminator does not merely drop a header: the last one runs
+       * into "Content-Length: N" and eats it. The server then has a bad
+       * credential and no way to size the body, waits for it, and closes.
+       * That reads back as a failed receive rather than an HTTP error, which
+       * is why it looked like a transport fault. task_http.c sets the same
+       * precedent with "Expect: 100-continue\r\n". */
+      strlcpy(otlp_st.headers, "Content-Type: application/json\r\n",
             sizeof(otlp_st.headers));
 
       p = raw;
@@ -438,10 +447,10 @@ bool otlp_log_exporter_init(const char *config_dir)
          if ((eq = strchr(p, '=')))
          {
             *eq = '\0';
-            otlp_append(otlp_st.headers, sizeof(otlp_st.headers), "\r\n");
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), p);
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), ": ");
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), eq + 1);
+            otlp_append(otlp_st.headers, sizeof(otlp_st.headers), "\r\n");
          }
          if (!comma)
             break;
