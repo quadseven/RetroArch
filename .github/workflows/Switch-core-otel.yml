@@ -52,16 +52,19 @@ jobs:
             makedir: "."
             makefile: Makefile.libretro
             submodules: "false"
+            extraflags: ""
           - core: mupen64plus_next
             repo: https://github.com/libretro/mupen64plus-libretro-nx
             makedir: "."
             makefile: Makefile
             submodules: "false"
+            extraflags: ""
           - core: ppsspp
             repo: https://github.com/hrydgard/ppsspp
             makedir: libretro
             makefile: Makefile
             submodules: "true"
+            extraflags: STATIC_LINKING=1
 
     steps:
       - name: Checkout RetroArch (this fork, with the exporter)
@@ -96,11 +99,13 @@ jobs:
         env:
           MAKEFILE: ${{ matrix.makefile }}
           MAKEDIR: ${{ matrix.makedir }}
+          EXTRAFLAGS: ${{ matrix.extraflags }}
         # PPSSPP's libretro Makefile includes Makefile.common relative to its
         # own directory, so it has to be run from there rather than via
         # -f libretro/Makefile from the repository root.
         run: |
-          make -C "$MAKEDIR" -f "$MAKEFILE" platform=libnx \
+          # shellcheck disable=SC2086
+          make -C "$MAKEDIR" -f "$MAKEFILE" platform=libnx $EXTRAFLAGS \
             -j"$(getconf _NPROCESSORS_ONLN)"
           echo "--- static libraries produced ---"
           find . -name "*.a" -size +100k | head
@@ -114,15 +119,17 @@ jobs:
         # else is.
         run: |
           NM="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-nm"
-          [ -x "$NM" ] || NM=nm
+          [ -x "$NM" ] || NM="nm"
           echo "--- every archive built ---"
           find core -name "*.a" -size +20k | sed "s/^/    /"
           CORE_LIB=""
-          for a in $(find core -name "*.a" -size +20k); do
+          while IFS= read -r a; do
             if "$NM" --defined-only "$a" 2>/dev/null | grep -qE " T retro_api_version"; then
               CORE_LIB="$a"; break
             fi
-          done
+          done <<EOF
+          $(find core -name "*.a" -size +20k)
+          EOF
           if [ -z "$CORE_LIB" ]; then
             echo "no archive exports retro_api_version, so no libretro core was built"
             exit 1
