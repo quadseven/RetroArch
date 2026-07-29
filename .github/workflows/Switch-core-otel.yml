@@ -106,12 +106,29 @@ jobs:
           find . -name "*.a" -size +100k | head
 
       - name: Hand the core to the RetroArch link step
+        # Selected by ABI rather than by filename. Several of these repos
+        # vendor unrelated prebuilt archives (PPSSPP ships MoltenVK and ffmpeg
+        # for iOS), and a name or size heuristic happily picks one of those.
+        # The link then fails on every retro_* entry point, far from the cause.
+        # An archive that defines retro_api_version is a libretro core; nothing
+        # else is.
         run: |
-          A=$(find core -name "*_libretro_libnx.a" | head -1)
-          [ -n "$A" ] || A=$(find core -name "*.a" -size +100k | head -1)
-          [ -n "$A" ] || { echo "no static library found"; exit 1; }
-          echo "using $A"
-          cp "$A" retroarch/libretro_libnx.a
+          NM="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-nm"
+          [ -x "$NM" ] || NM=nm
+          echo "--- every archive built ---"
+          find core -name "*.a" -size +20k | sed "s/^/    /"
+          CORE_LIB=""
+          for a in $(find core -name "*.a" -size +20k); do
+            if "$NM" --defined-only "$a" 2>/dev/null | grep -qE " T retro_api_version"; then
+              CORE_LIB="$a"; break
+            fi
+          done
+          if [ -z "$CORE_LIB" ]; then
+            echo "no archive exports retro_api_version, so no libretro core was built"
+            exit 1
+          fi
+          echo "selected $CORE_LIB"
+          cp "$CORE_LIB" retroarch/libretro_libnx.a
 
       - name: Build the instrumented core NRO
         working-directory: retroarch
