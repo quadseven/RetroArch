@@ -12,18 +12,21 @@ name: CI Switch core with OTLP
 # building the core NRO from this fork rather than taking the prebuilt one
 # from the libretro buildbot, which has no exporter in it.
 #
-# The buildbot publishes only finished .nro files, no .a, so the core has to
-# be compiled from source here and handed to the RetroArch link step.
+# The buildbot publishes only finished .nro files and no .a, so each core is
+# compiled from source here and handed to the RetroArch link step.
+#
+# This runs on push rather than workflow_dispatch because GitHub only
+# registers dispatchable workflows from the default branch, and this work
+# lives on a feature branch.
 
 on:
+  push:
+    paths:
+      - ".github/workflows/Switch-core-otel.yml"
+      - "otlp_log_exporter.c"
+      - "otlp_log_exporter.h"
+      - "Makefile.libnx"
   workflow_dispatch:
-    inputs:
-      core:
-        description: "Core to build"
-        required: true
-        default: mgba
-        type: choice
-        options: [mgba, ppsspp, mupen64plus_next]
 
 permissions:
   contents: read
@@ -38,37 +41,30 @@ jobs:
       image: devkitpro/devkita64:latest
       options: --user root
 
+    strategy:
+      # One core failing to compile says nothing about the others, and PPSSPP
+      # is much the largest of the three, so let each stand or fall alone.
+      fail-fast: false
+      matrix:
+        include:
+          - core: mgba
+            repo: https://github.com/libretro/mgba
+            makefile: Makefile.libretro
+            submodules: "false"
+          - core: mupen64plus_next
+            repo: https://github.com/libretro/mupen64plus-libretro-nx
+            makefile: Makefile
+            submodules: "false"
+          - core: ppsspp
+            repo: https://github.com/hrydgard/ppsspp
+            makefile: libretro/Makefile
+            submodules: "true"
+
     steps:
       - name: Checkout RetroArch (this fork, with the exporter)
         uses: actions/checkout@v4
         with:
           path: retroarch
-
-      - name: Resolve core details
-        id: core
-        # Passed through env rather than interpolated into the shell. The
-        # choice type already constrains this to the three options above, but
-        # workflow inputs do not belong in a run: body regardless.
-        env:
-          CORE: ${{ inputs.core }}
-        run: |
-          case "$CORE" in
-            mgba)
-              echo "repo=https://github.com/libretro/mgba" >> "$GITHUB_OUTPUT"
-              echo "makefile=Makefile.libretro" >> "$GITHUB_OUTPUT"
-              echo "submodules=false" >> "$GITHUB_OUTPUT"
-              ;;
-            ppsspp)
-              echo "repo=https://github.com/hrydgard/ppsspp" >> "$GITHUB_OUTPUT"
-              echo "makefile=libretro/Makefile" >> "$GITHUB_OUTPUT"
-              echo "submodules=true" >> "$GITHUB_OUTPUT"
-              ;;
-            mupen64plus_next)
-              echo "repo=https://github.com/libretro/mupen64plus-libretro-nx" >> "$GITHUB_OUTPUT"
-              echo "makefile=Makefile" >> "$GITHUB_OUTPUT"
-              echo "submodules=false" >> "$GITHUB_OUTPUT"
-              ;;
-          esac
 
       - name: Install port libraries
         # pkg.devkitpro.org intermittently answers 403 on the database sync,
@@ -82,8 +78,8 @@ jobs:
 
       - name: Clone the core
         env:
-          REPO: ${{ steps.core.outputs.repo }}
-          SUBMODULES: ${{ steps.core.outputs.submodules }}
+          REPO: ${{ matrix.repo }}
+          SUBMODULES: ${{ matrix.submodules }}
         run: |
           if [ "$SUBMODULES" = "true" ]; then
             git clone --depth 1 --recursive "$REPO" core
@@ -95,7 +91,7 @@ jobs:
       - name: Build the core as a static library
         working-directory: core
         env:
-          MAKEFILE: ${{ steps.core.outputs.makefile }}
+          MAKEFILE: ${{ matrix.makefile }}
         run: |
           make -f "$MAKEFILE" platform=libnx -j"$(getconf _NPROCESSORS_ONLN)"
           echo "--- static libraries produced ---"
@@ -114,7 +110,7 @@ jobs:
         # No HAVE_STATIC_DUMMY here: that is what makes the build link
         # libretro_libnx.a and produce a core rather than the launcher.
         env:
-          CORE: ${{ inputs.core }}
+          CORE: ${{ matrix.core }}
         run: |
           make -f Makefile.libnx -j"$(getconf _NPROCESSORS_ONLN)" \
             TARGET="${CORE}_libretro_libnx"
@@ -124,9 +120,9 @@ jobs:
         working-directory: retroarch
         # A core NRO that silently lacks the exporter looks identical to one
         # that has it until it ships nothing, which is the failure this whole
-        # workflow exists to avoid.
+        # workflow exists to prevent.
         env:
-          CORE: ${{ inputs.core }}
+          CORE: ${{ matrix.core }}
         run: |
           NRO="${CORE}_libretro_libnx.nro"
           for s in "otel-status.txt" "otel-endpoint" "started, endpoint=%s"; do
@@ -151,10 +147,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.core }}-otel-nro
-          path: retroarch/${{ inputs.core }}_libretro_libnx.nro
+          name: ${{ matrix.core }}-otel-nro
+          path: retroarch/${{ matrix.core }}_libretro_libnx.nro
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.core }}-otel-elf
-          path: retroarch/${{ inputs.core }}_libretro_libnx.elf
+          name: ${{ matrix.core }}-otel-elf
+          path: retroarch/${{ matrix.core }}_libretro_libnx.elf
