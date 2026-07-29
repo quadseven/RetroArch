@@ -38,7 +38,7 @@ typedef struct
 typedef struct
 {
    bool            running;
-   volatile bool   stopping;
+   bool            stopping;     /* guarded by lock */
 
    char            url[512];
    /* May carry a credential. Never logged, never returned. */
@@ -271,8 +271,10 @@ static bool otlp_post(const char *body)
 
    if (!(conn = net_http_connection_new(otlp_st.url, "POST", body)))
    {
+      slock_lock(otlp_st.lock);
       strlcpy(otlp_st.last_error, "could not create connection",
             sizeof(otlp_st.last_error));
+      slock_unlock(otlp_st.lock);
       return false;
    }
 
@@ -286,15 +288,21 @@ static bool otlp_post(const char *body)
 
    if (!(http = net_http_new(conn)))
    {
+      slock_lock(otlp_st.lock);
       strlcpy(otlp_st.last_error, "connection failed (dns, tls or refused)",
             sizeof(otlp_st.last_error));
+      slock_unlock(otlp_st.lock);
       net_http_connection_free(conn);
       return false;
    }
 
    while (!net_http_update(http, NULL, NULL))
    {
-      if (otlp_st.stopping)
+      bool stop;
+      slock_lock(otlp_st.lock);
+      stop = otlp_st.stopping;
+      slock_unlock(otlp_st.lock);
+      if (stop)
          break;
       retro_sleep(10);
    }
@@ -303,8 +311,12 @@ static bool otlp_post(const char *body)
    ok     = (status >= 200 && status < 300);
 
    if (!ok)
+   {
+      slock_lock(otlp_st.lock);
       snprintf(otlp_st.last_error, sizeof(otlp_st.last_error),
             "endpoint returned HTTP %d", status);
+      slock_unlock(otlp_st.lock);
+   }
 
    net_http_delete(http);
    net_http_connection_free(conn);
@@ -325,7 +337,17 @@ static void otlp_worker(void *unused)
    (void)unused;
 
    if (!batch)
+   {
+      /* Without this the exporter stays "running" with no consumer: producers
+       * keep accepting records into a queue nobody drains, and the exit
+       * report shows sent=0 with zero failures, which reads as a transport
+       * mystery instead of an allocation failure. Stop loudly. */
+      slock_lock(otlp_st.lock);
+      otlp_st.running = false;
+      slock_unlock(otlp_st.lock);
+      otlp_write_status("stopped: worker could not allocate the batch buffer");
       return;
+   }
 
    for (;;)
    {
@@ -535,12 +557,21 @@ void otlp_log_exporter_log(const char *tag, const char *line)
    otlp_record_t *rec;
    int severity;
 
-   if (!otlp_st.running || !line || !*line)
+   if (!line || !*line)
       return;
 
    severity = otlp_severity_number(tag);
 
    slock_lock(otlp_st.lock);
+
+   /* Checked under the lock: the worker clears running from its own thread
+    * when it stops itself, and enqueueing past that point writes into a
+    * queue nobody will ever drain. */
+   if (!otlp_st.running)
+   {
+      slock_unlock(otlp_st.lock);
+      return;
+   }
 
    rec = &otlp_st.records[otlp_st.head];
    otlp_st.head = (otlp_st.head + 1) % OTLP_MAX_RECORDS;
@@ -568,7 +599,10 @@ void otlp_log_exporter_log(const char *tag, const char *line)
 
 void otlp_log_exporter_deinit(void)
 {
-   if (!otlp_st.running)
+   /* Keyed on the thread, not on running: the worker sets running to false
+    * itself if its batch allocation fails, and bailing out on that basis
+    * would skip the join and leak the lock, the cond and the queue. */
+   if (!otlp_st.thread)
       return;
 
    slock_lock(otlp_st.lock);
