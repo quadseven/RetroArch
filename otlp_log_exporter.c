@@ -310,9 +310,17 @@ static bool otlp_post(const char *body)
 
 static void otlp_worker(void *unused)
 {
-   otlp_record_t batch[OTLP_MAX_BATCH];
+   /* Heap, not stack. OTLP_MAX_BATCH records is around 134KB, which is far
+    * more than a thread stack on this platform: an earlier version declared
+    * this as a local array and faulted in the function prologue the instant
+    * the thread was created. */
+   otlp_record_t *batch = (otlp_record_t*)malloc(
+         sizeof(otlp_record_t) * OTLP_MAX_BATCH);
 
    (void)unused;
+
+   if (!batch)
+      return;
 
    for (;;)
    {
@@ -334,6 +342,7 @@ static void otlp_worker(void *unused)
       if (n == 0 && otlp_st.stopping)
       {
          slock_unlock(otlp_st.lock);
+         free(batch);
          return;
       }
 
