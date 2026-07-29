@@ -2,6 +2,7 @@
  *  See otlp_log_exporter.h for what this is and how it is configured.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,9 @@
 #include <string/stdstring.h>
 
 #include "otlp_log_exporter.h"
+
+/* Defined below; used by init before its definition. */
+static void otlp_write_status(const char *fmt, ...);
 #include "file_path_special.h"
 
 /* Bounded so a runaway log cannot grow memory without limit. Dropping the
@@ -54,6 +58,7 @@ typedef struct
    unsigned        stat_dropped;
    unsigned        stat_failures;
    char            last_error[160];
+   char            config_dir[256];
 } otlp_state_t;
 
 static otlp_state_t otlp_st;
@@ -444,7 +449,9 @@ bool otlp_log_exporter_init(const char *config_dir)
    if (!(otlp_st.cond = scond_new()))
       goto error;
 
+   strlcpy(otlp_st.config_dir, config_dir, sizeof(otlp_st.config_dir));
    otlp_st.running = true;
+   otlp_write_status("started, endpoint=%s", otlp_st.url);
 
    if (!(otlp_st.thread = sthread_create(otlp_worker, NULL)))
    {
@@ -462,6 +469,32 @@ error:
    free(otlp_st.records);
    memset(&otlp_st, 0, sizeof(otlp_st));
    return false;
+}
+
+
+/**
+ * Writes a one line status file next to the config.
+ *
+ * Deliberately plain fopen rather than RARCH_LOG. On some ports the log file
+ * is never opened, so anything reported through the logger is invisible, and
+ * a diagnostic that depends on the subsystem it is diagnosing is worth
+ * nothing. This is the only place the exporter reports on itself.
+ */
+static void otlp_write_status(const char *fmt, ...)
+{
+   char path[512];
+   FILE *fp;
+   va_list ap;
+
+   snprintf(path, sizeof(path), "%s/otel-status.txt", otlp_st.config_dir);
+   if (!(fp = fopen(path, "w")))
+      return;
+
+   va_start(ap, fmt);
+   vfprintf(fp, fmt, ap);
+   va_end(ap);
+   fputc('\n', fp);
+   fclose(fp);
 }
 
 bool otlp_log_exporter_enabled(void)
@@ -517,6 +550,11 @@ void otlp_log_exporter_deinit(void)
 
    if (otlp_st.thread)
       sthread_join(otlp_st.thread);
+
+   otlp_write_status("accepted=%u sent=%u dropped=%u failures=%u last_error=%s",
+         otlp_st.stat_accepted, otlp_st.stat_sent, otlp_st.stat_dropped,
+         otlp_st.stat_failures,
+         otlp_st.last_error[0] ? otlp_st.last_error : "none");
 
    scond_free(otlp_st.cond);
    slock_free(otlp_st.lock);
