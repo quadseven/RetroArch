@@ -65,6 +65,29 @@ void otlp_log_exporter_log(const char *tag, const char *line);
  *
  * Stops the worker after a final flush attempt.
  */
+/**
+ * otlp_log_exporter_set_suspended:
+ *
+ * Stops and restarts network activity around a console suspend.
+ *
+ * Nothing here may touch a socket while the application is out of focus. On
+ * Switch, losing focus means the console is sleeping or the HOME menu has
+ * taken over, and the OS tears the network stack down underneath a process
+ * that keeps running. A request already inside the HTTP layer then sits in
+ * bsdsocket across the suspend and resume boundary, and the process does not
+ * survive it.
+ *
+ * This is not theoretical. The same defect in Moonlight-Switch's exporter
+ * hung the console on the first sleep every time, and the identical binary
+ * with the exporter disabled survived three of three. Fixed there by parking
+ * the worker on focus loss; this is the same fix.
+ *
+ * Records keep accumulating while suspended and ship after resume. The buffer
+ * is bounded and drops oldest, which is the right trade for a sleep that
+ * outlasts it.
+ */
+void otlp_log_exporter_set_suspended(bool suspended);
+
 void otlp_log_exporter_deinit(void);
 
 /**

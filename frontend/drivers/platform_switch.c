@@ -158,6 +158,19 @@ static void on_applet_hook(AppletHookType hook, void *param)
          focus_state = appletGetFocusState();
          platform_switch_has_focus = focus_state == AppletFocusState_InFocus;
 
+#ifdef HAVE_OTLP_LOG_EXPORT
+         /* Park the log exporter while we are off screen. Losing focus here
+          * means the console is sleeping or HOME has taken over, and the OS
+          * tears the network stack down underneath a process that keeps
+          * running. A request already inside the HTTP layer then sits in
+          * bsdsocket across suspend and resume, and the process does not
+          * survive it. Proven on hardware in Moonlight-Switch, whose exporter
+          * had the same defect: identical binary with the exporter disabled
+          * survived sleep three times out of three, enabled it hung the
+          * console on the first attempt. */
+         otlp_log_exporter_set_suspended(!platform_switch_has_focus);
+#endif
+
          if (!platform_switch_has_focus)
          {
             if (hosversionBefore(8, 0, 0))

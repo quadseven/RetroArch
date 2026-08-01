@@ -39,6 +39,7 @@ typedef struct
 {
    bool            running;
    bool            stopping;     /* guarded by lock */
+   bool            suspended;    /* guarded by lock */
 
    char            url[512];
    /* May carry a credential. Never logged, never returned. */
@@ -355,8 +356,16 @@ static void otlp_worker(void *unused)
 
       slock_lock(otlp_st.lock);
 
-      if (!otlp_st.stopping && otlp_st.count == 0)
+      if ((!otlp_st.stopping && otlp_st.count == 0) || otlp_st.suspended)
          scond_wait_timeout(otlp_st.cond, otlp_st.lock, OTLP_FLUSH_US);
+
+      /* Park while the console is suspended rather than taking a batch we
+       * would then try to post over a network the OS is dismantling. */
+      if (otlp_st.suspended && !otlp_st.stopping)
+      {
+         slock_unlock(otlp_st.lock);
+         continue;
+      }
 
       while (n < OTLP_MAX_BATCH && otlp_st.count > 0)
       {
@@ -377,7 +386,31 @@ static void otlp_worker(void *unused)
 
       if (n > 0)
       {
-         char *payload = otlp_build_payload(batch, n);
+         char *payload;
+         bool  parked;
+
+         slock_lock(otlp_st.lock);
+         parked = otlp_st.suspended && !otlp_st.stopping;
+         if (parked)
+         {
+            /* Focus was lost after the batch was taken. Put it back rather
+             * than posting into a network that is going away; the records are
+             * still wanted, just not now. */
+            unsigned i;
+            for (i = 0; i < n && otlp_st.count < OTLP_MAX_RECORDS; i++)
+            {
+               unsigned tail = (otlp_st.head + OTLP_MAX_RECORDS
+                     - otlp_st.count - 1) % OTLP_MAX_RECORDS;
+               otlp_st.records[tail] = batch[n - 1 - i];
+               otlp_st.count++;
+            }
+         }
+         slock_unlock(otlp_st.lock);
+
+         if (parked)
+            continue;
+
+         payload = otlp_build_payload(batch, n);
          bool ok       = payload && otlp_post(payload);
 
          free(payload);
@@ -595,6 +628,25 @@ void otlp_log_exporter_log(const char *tag, const char *line)
 
    slock_unlock(otlp_st.lock);
    scond_signal(otlp_st.cond);
+}
+
+void otlp_log_exporter_set_suspended(bool suspended)
+{
+   bool changed;
+
+   if (!otlp_st.running)
+      return;
+
+   slock_lock(otlp_st.lock);
+   changed = (otlp_st.suspended != suspended);
+   otlp_st.suspended = suspended;
+   slock_unlock(otlp_st.lock);
+
+   /* Waking on resume matters: the worker may be part way through its flush
+    * wait, and records buffered during the sleep should not sit there for the
+    * remainder of it. */
+   if (changed && !suspended)
+      scond_signal(otlp_st.cond);
 }
 
 void otlp_log_exporter_deinit(void)
