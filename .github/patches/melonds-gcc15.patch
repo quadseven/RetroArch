@@ -26,7 +26,10 @@ buildbot pins an older toolchain, this builds on the current one.
    purpose address space; JitRXStart is found separately by scanning with
    svcQueryMemory and needs nothing. The reservation is held in a new member
    so the destructor can release it, where virtmemFree used to sit, since
-   that call was a documented no-op and its replacement is not.
+   that call was a documented no-op and its replacement is not. The member
+   forward declares VirtmemReservation rather than pulling <switch.h> into
+   every translation unit including this header: a pointer to an incomplete
+   type is all that is needed.
 
 4. offsetof with a runtime index:
 
@@ -99,17 +102,22 @@ index 50e33fc..da296e5 100644
  
  void Compiler::LoadCPSR()
 diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.h b/src/ARMJIT_A64/ARMJIT_Compiler.h
-index 7e13507..befbf6c 100644
+index 7e13507..37e57d4 100644
 --- a/src/ARMJIT_A64/ARMJIT_Compiler.h
 +++ b/src/ARMJIT_A64/ARMJIT_Compiler.h
-@@ -225,6 +225,11 @@ public:
+@@ -225,6 +225,16 @@ public:
  #ifdef __SWITCH__
      void* JitRWBase;
      void* JitRWStart;
 +#ifdef __SWITCH__
-+    /* Held so the destructor can release what virtmemAddReservation took;
++    /* Forward declared rather than pulling <switch.h> into every translation
++       unit that includes this header; a pointer to an incomplete type is all
++       that is needed here. libnx declares it as
++       "typedef struct VirtmemReservation VirtmemReservation".
++
++       Held so the destructor can release what virtmemAddReservation took:
 +       libnx 4.0's replacement for virtmemReserve is not a no-op to undo. */
-+    VirtmemReservation* JitRWReservation;
++    struct VirtmemReservation* JitRWReservation;
 +#endif
      void* JitRXStart;
  #endif
