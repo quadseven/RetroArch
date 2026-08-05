@@ -53,7 +53,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: devkitpro/devkita64:latest
+      # Pinned by digest, not :latest. This image already contains the whole
+      # toolchain (its own Dockerfile installs switch-dev and switch-portlibs),
+      # so nothing here needs to reach pkg.devkitpro.org at build time. That
+      # host sits behind Cloudflare and has returned 403 to everything,
+      # including plain curl from a laptop, which used to take the build down
+      # with it. Pulling from Docker Hub is the only external fetch left.
+      #
+      # Digest is devkitpro/devkita64:latest as of 2026-08-05. Moving it is a
+      # deliberate toolchain bump, not something that happens overnight.
+      image: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
       options: --user root
 
     strategy:
@@ -95,15 +104,52 @@ jobs:
         with:
           path: retroarch
 
-      - name: Install port libraries
-        # pkg.devkitpro.org intermittently answers 403 on the database sync,
-        # which fails a build that has nothing wrong with it.
+      - name: Verify the toolchain the image already ships
+        # There used to be a "dkp-pacman -Sy switch-dev switch-portlibs" here
+        # with five retries. It was pure ceremony: the devkitpro/devkita64
+        # Dockerfile installs both of those groups itself, so every run was
+        # re-downloading packages it already had, and pacman said as much
+        # ("warning: switch-cmake is up to date -- reinstalling").
+        #
+        # The cost of that ceremony was a hard dependency on pkg.devkitpro.org,
+        # and when Cloudflare started answering 403 for everyone the builds
+        # died at the first step with nothing wrong in the tree.
+        #
+        # Checking what the image provides is strictly better: no network, and
+        # a missing piece is named here rather than surfacing as a confusing
+        # compile error a few minutes later.
         run: |
-          for attempt in 1 2 3 4 5; do
-            dkp-pacman --noconfirm -Sy switch-dev switch-portlibs && exit 0
-            echo "attempt ${attempt} failed"; sleep $(( attempt * 20 ))
-          done
-          echo "package install failed"; exit 1
+          fail=0
+          check() {
+            if [ -e "$2" ]; then
+              echo "  ok      $1"
+            else
+              echo "  MISSING $1  ($2)"; fail=1
+            fi
+          }
+          : "${DEVKITPRO:=/opt/devkitpro}"
+          PORTLIBS="$DEVKITPRO/portlibs/switch"
+          echo "toolchain:"
+          check "devkitA64 compiler" "$DEVKITPRO/devkitA64/bin/aarch64-none-elf-gcc"
+          check "libnx headers"      "$DEVKITPRO/libnx/include/switch.h"
+          check "libnx switch_rules" "$DEVKITPRO/libnx/switch_rules"
+          check "libnx.a"            "$DEVKITPRO/libnx/lib/libnx.a"
+          echo "portlibs RetroArch links against:"
+          check "zlib"               "$PORTLIBS/include/zlib.h"
+          check "libpng"             "$PORTLIBS/include/png.h"
+          check "mbedtls"            "$PORTLIBS/include/mbedtls/ssl.h"
+          check "ffmpeg avcodec"     "$PORTLIBS/include/libavcodec/avcodec.h"
+          check "mesa EGL"           "$PORTLIBS/include/EGL/egl.h"
+          check "drm_nouveau"        "$PORTLIBS/lib/libdrm_nouveau.a"
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "the pinned image no longer ships part of the toolchain."
+            echo "either the digest moved or devkitPro changed the image."
+            exit 1
+          fi
+          echo
+          echo "libnx version: $(sed -n 's/^VERSION[[:space:]]*=[[:space:]]*//p' \
+            "$DEVKITPRO/libnx/switch_rules" 2>/dev/null || echo unknown)"
 
       - name: Clone the core
         env:
