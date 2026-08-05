@@ -1,38 +1,48 @@
-Build the DS core against a current toolchain.
+Build the DS core against devkitA64 GCC 15.2.0 and libnx 4.x.
 
-Three unrelated breakages, all from devkitA64 now shipping GCC 15.2.0 while
-the buildbot stays on something older. None is Switch-specific; any platform
-building this with a recent compiler hits them.
+melonDS is the last core still failing, and it failed for four different
+reasons across four builds. All of them come from the same place: the
+buildbot pins an older toolchain, this builds on the current one.
 
-1. A real defect the compiler finally refused:
+1. A real defect a lenient compiler had been waving through:
 
-       rsemaphore.c:104:7: error: 'return' with no value, in function
-       returning non-void [-Wreturn-mismatch]
+       rsemaphore.c:104: 'return' with no value, in function returning
+       non-void
 
-   ssem_trywait returns bool and its null check returns nothing. GCC made
-   this an error by default in 14. false is the only defensible value: a
-   semaphore that does not exist has not been acquired, and every caller
-   reads the result as "did I get it".
+   ssem_trywait returns bool and its null check returned nothing. false is
+   the only defensible value; every caller reads the result as "did I get
+   it".
 
-2. and 3. Declarations that used to arrive transitively and no longer do,
-   which is libstdc++ tightening its own includes rather than anything
-   melonDS changed:
+2. Declarations that used to arrive transitively and no longer do, which is
+   libstdc++ tightening its own includes rather than melonDS changing:
+   <ctime> for time(), <limits> for std::numeric_limits, and <algorithm>
+   for std::min and std::max across five more files. Those five were found
+   by scanning every source for a std symbol whose header it never
+   includes, rather than waiting for each to surface a build at a time.
 
-       libretro.cpp:60:10:        'time' was not declared in this scope
-       Arm64Emitter.cpp:2111:35:  'numeric_limits' is not a member of 'std'
+3. libnx 4.0's removal of virtmemReserve, which now makes melonDS the
+   fourth core hit by it after mupen64plus, PPSSPP and flycast. There is
+   only one call here and it feeds svcMapProcessMemory, so it wants general
+   purpose address space; JitRXStart is found separately by scanning with
+   svcQueryMemory and needs nothing. The reservation is held in a new member
+   so the destructor can release it, where virtmemFree used to sit, since
+   that call was a documented no-op and its replacement is not.
 
-The <algorithm> additions beyond Arm64Emitter were found by checking every
-source for a std symbol whose header it never includes, rather than waiting
-for each to surface one build at a time. Three rounds of one-error-at-a-time
-was enough. Files belonging to the desktop frontend and to the x64 JIT are
-deliberately untouched: neither is in an aarch64 libretro build, and
-patching them would be churn on code this never compiles.
+4. offsetof with a runtime index:
 
-An include added to a file that turns out not to need it costs nothing; a
-missing one costs a full build cycle to discover.
+       ARMJIT_Compiler.cpp:236: 'reg' is not a constant expression
+
+   offsetof(ARM, R[reg]) is undefined behaviour that compilers accepted for
+   years and GCC 15 rejects. Rewritten as offsetof(ARM, R) + sizeof(u32) *
+   reg, which is the same address by definition and actually legal. The
+   offsetof(ARM, R[15]) a few lines away is fine and untouched: a constant
+   index has always been valid.
+
+Files belonging to the desktop frontend and the x64 JIT are deliberately
+left alone. Neither is in an aarch64 libretro build.
 
 diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.cpp b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
-index 50e33fc..0c9449a 100644
+index 50e33fc..da296e5 100644
 --- a/src/ARMJIT_A64/ARMJIT_Compiler.cpp
 +++ b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
 @@ -1,3 +1,4 @@
@@ -40,6 +50,70 @@ index 50e33fc..0c9449a 100644
  #include "ARMJIT_Compiler.h"
  
  #include "../ARMInterpreter.h"
+@@ -52,7 +53,14 @@ Compiler::Compiler()
+     JitRWBase = memalign(0x1000, JitMemSize);
+ 
+     JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
+-    JitRWStart = virtmemReserve(JitMemSize);
++    /* libnx 4.0 removed virtmemReserve. This address is handed to
++       svcMapProcessMemory below, so it needs general purpose address space;
++       JitRXStart is found separately by scanning with svcQueryMemory and is
++       not affected. The 0x1000 guard matches the old call. */
++    virtmemLock();
++    JitRWStart = virtmemFindAslr(JitMemSize, 0x1000);
++    JitRWReservation = JitRWStart ? virtmemAddReservation(JitRWStart, JitMemSize) : NULL;
++    virtmemUnlock();
+     MemoryInfo info = {0};
+     u32 pageInfo = {0};
+     int i = 0;
+@@ -219,7 +227,15 @@ Compiler::~Compiler()
+     {
+         bool succeded = R_SUCCEEDED(svcUnmapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize));
+         assert(succeded);
+-        virtmemFree(JitRWStart, JitMemSize);
++        /* virtmemFree was a documented no-op; a reservation is not, and
++           leaks the address space if it is never removed. */
++        if (JitRWReservation)
++        {
++            virtmemLock();
++            virtmemRemoveReservation(JitRWReservation);
++            virtmemUnlock();
++            JitRWReservation = NULL;
++        }
+         succeded = R_SUCCEEDED(svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize));
+         assert(succeded);
+         free(JitRWBase);
+@@ -232,12 +248,12 @@ void Compiler::LoadReg(int reg, ARM64Reg nativeReg)
+     if (reg == 15)
+         MOVI2R(nativeReg, R15);
+     else
+-        LDR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R[reg]));
++        LDR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R) + sizeof(u32) * reg);
+ }
+ 
+ void Compiler::SaveReg(int reg, ARM64Reg nativeReg)
+ {
+-    STR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R[reg]));
++    STR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R) + sizeof(u32) * reg);
+ }
+ 
+ void Compiler::LoadCPSR()
+diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.h b/src/ARMJIT_A64/ARMJIT_Compiler.h
+index 7e13507..befbf6c 100644
+--- a/src/ARMJIT_A64/ARMJIT_Compiler.h
++++ b/src/ARMJIT_A64/ARMJIT_Compiler.h
+@@ -225,6 +225,11 @@ public:
+ #ifdef __SWITCH__
+     void* JitRWBase;
+     void* JitRWStart;
++#ifdef __SWITCH__
++    /* Held so the destructor can release what virtmemAddReservation took;
++       libnx 4.0's replacement for virtmemReserve is not a no-op to undo. */
++    VirtmemReservation* JitRWReservation;
++#endif
+     void* JitRXStart;
+ #endif
+ };
 diff --git a/src/GPU2D_Neon.cpp b/src/GPU2D_Neon.cpp
 index 813f34c..4770eb6 100644
 --- a/src/GPU2D_Neon.cpp
