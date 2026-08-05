@@ -1,0 +1,109 @@
+Restore the Dreamcast core on libnx 4.x.
+
+libnx 4.0 removed virtmemReserve(), which this file calls at three sites:
+
+    vmem_utils.cpp:145:16: error: 'virtmemReserve' was not declared in this scope
+    vmem_utils.cpp:246:41: error: ...
+    vmem_utils.cpp:391:24: error: ...
+
+The replacement is not one substitution repeated three times. Which finder
+is correct depends on the syscall each address is later passed to, and this
+file uses both:
+
+    mem_region_reserve   -> mem_region_map_file -> svcMapProcessMemory
+                            general purpose address space, virtmemFindAslr
+
+    vmem_fd_codememory   -> svcMapProcessCodeMemory and
+                            svcSetProcessMemoryPermission
+                            the code region, virtmemFindCodeMemory
+
+    ptr_rw               -> svcMapProcessMemory
+                            general purpose again, virtmemFindAslr
+
+Using one finder throughout compiles cleanly and then fails at the map with
+a bare result code and nothing pointing at the reason.
+
+The 0x1000 guard matches what libnx 3.x virtmemReserve did internally.
+
+Reservations are deliberately not tracked. mem_region_release is already a
+no-op on this platform, and the other two allocations happen once during
+startup, so nothing here reserves repeatedly and there would be nothing to
+release the bookkeeping.
+
+diff --git a/core/libretro/vmem_utils.cpp b/core/libretro/vmem_utils.cpp
+index f1d6fa0..c333cd9 100644
+--- a/core/libretro/vmem_utils.cpp
++++ b/core/libretro/vmem_utils.cpp
+@@ -139,10 +139,50 @@ bool mem_region_set_exec(void *start, size_t len)
+ 	return true;
+ }
+ 
++#ifdef HAVE_LIBNX
++/*
++ * libnx 4.0 removed virtmemReserve in favour of an explicit find-then-reserve
++ * pair. Which finder is correct depends entirely on the syscall the address
++ * is later handed to, and this file uses both:
++ *
++ *   svcMapProcessMemory      wants general purpose address space -> Aslr
++ *   svcMapProcessCodeMemory  wants the code region               -> CodeMemory
++ *
++ * The 0x1000 guard matches what virtmemReserve did internally.
++ *
++ * The reservations are deliberately not tracked. mem_region_release is
++ * already a no-op on this platform and the two other allocations happen once
++ * at startup, so there is nothing here that reserves repeatedly; recording
++ * them would add bookkeeping with nothing to release it.
++ */
++static void *nx_reserve_aslr(size_t len)
++{
++	void *addr;
++	virtmemLock();
++	addr = virtmemFindAslr(len, 0x1000);
++	if (addr)
++		virtmemAddReservation(addr, len);
++	virtmemUnlock();
++	return addr;
++}
++
++static void *nx_reserve_code(size_t len)
++{
++	void *addr;
++	virtmemLock();
++	addr = virtmemFindCodeMemory(len, 0x1000);
++	if (addr)
++		virtmemAddReservation(addr, len);
++	virtmemUnlock();
++	return addr;
++}
++#endif
++
+ void *mem_region_reserve(void *start, size_t len)
+ {
+ #ifdef HAVE_LIBNX
+-	return virtmemReserve(len);
++	/* Feeds svcMapProcessMemory by way of mem_region_map_file. */
++	return nx_reserve_aslr(len);
+ #else
+ 	void *p = mmap(start, len, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+ 	if (p == MAP_FAILED)
+@@ -243,7 +283,9 @@ VMemType vmem_platform_init(void **vmem_base_addr, void **sh4rcb_addr) {
+ 	if (vmem_fd_page < 0)
+ 		return MemTypeError;
+ 
+-	vmem_fd_codememory = (uintptr_t)virtmemReserve(size_aligned);
++	/* Passed to svcMapProcessCodeMemory and svcSetProcessMemoryPermission
++	 * below, so this one has to come out of the code region. */
++	vmem_fd_codememory = (uintptr_t)nx_reserve_code(size_aligned);
+ 	
+ 	if(R_FAILED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64) vmem_fd_codememory, (u64) vmem_fd_page, size_aligned)))
+ 		printf("Failed to Map memory (platform_int)...\n");
+@@ -388,7 +430,8 @@ bool vmem_platform_prepare_jit_block(void *code_area, unsigned size, void **code
+ 	void *ptr_rw = mmap(NULL, size, PROT_READ | PROT_WRITE,
+ 	                    MAP_SHARED | MAP_NOSYNC, shmem_fd2, 0);
+ #else
+-	void* ptr_rw = virtmemReserve(size_aligned);
++	/* RW alias mapped with svcMapProcessMemory, so general purpose space. */
++	void* ptr_rw = nx_reserve_aslr(size_aligned);
+ 	if(R_FAILED(svcMapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)code_area, size_aligned)))
+ 		printf("Failed to map jit rw block...\n");
+ #endif // HAVE_LIBNX

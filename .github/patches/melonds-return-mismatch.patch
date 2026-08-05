@@ -1,0 +1,26 @@
+Return a value from ssem_trywait.
+
+    rsemaphore.c:104:7: error: 'return' with no value, in function returning
+    non-void [-Wreturn-mismatch]
+
+The null check in a bool function returns nothing. GCC has warned about this
+for years and made it an error by default in 14, so the core stopped
+building against the current devkitA64 (15.2.0) while remaining fine on
+whatever the buildbot pins.
+
+false is the only defensible value: a semaphore that does not exist has not
+been acquired, and every caller treats the result as "did I get it".
+
+diff --git a/src/libretro/libretro-common/rthreads/rsemaphore.c b/src/libretro/libretro-common/rthreads/rsemaphore.c
+index 7d32524..523d001 100644
+--- a/src/libretro/libretro-common/rthreads/rsemaphore.c
++++ b/src/libretro/libretro-common/rthreads/rsemaphore.c
+@@ -101,7 +101,7 @@ void ssem_wait(ssem_t *semaphore)
+ bool ssem_trywait(ssem_t *semaphore)
+ {
+    if (!semaphore)
+-      return;
++      return false;
+ 
+    slock_lock(semaphore->mutex);
+ 

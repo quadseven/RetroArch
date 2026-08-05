@@ -134,7 +134,7 @@ jobs:
             cmakeargs: ""
             cmaketarget: ""
             ffmpeg: ""
-            patch: ""
+            patch: flycast-libnx4-virtmem.patch
           - core: gambatte
             repo: https://github.com/libretro/gambatte-libretro
             branch: master
@@ -171,7 +171,7 @@ jobs:
             cmakeargs: ""
             cmaketarget: ""
             ffmpeg: ""
-            patch: ""
+            patch: melonds-return-mismatch.patch
           - core: nestopia
             repo: https://github.com/libretro/nestopia
             branch: master
