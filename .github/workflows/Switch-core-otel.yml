@@ -171,7 +171,7 @@ jobs:
             cmakeargs: ""
             cmaketarget: ""
             ffmpeg: ""
-            patch: melonds-return-mismatch.patch
+            patch: melonds-gcc15.patch
           - core: nestopia
             repo: https://github.com/libretro/nestopia
             branch: master
