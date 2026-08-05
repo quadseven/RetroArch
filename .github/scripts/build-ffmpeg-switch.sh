@@ -44,7 +44,40 @@ set -euo pipefail
 FFMPEG_SRC="${1:?usage: build-ffmpeg-switch.sh <path to ffmpeg source tree>}"
 
 : "${DEVKITPRO:=/opt/devkitpro}"
+
+# devkitPro's own switch-ffmpeg PKGBUILD sources this and so does everything
+# else that builds a portlib. It puts devkitA64/bin and the portlibs bin
+# directory on PATH and exports CC, AR, RANLIB and PORTLIBS_PREFIX.
+#
+# Without it configure cannot find the compiler at all:
+#
+#     ./configure: 850: aarch64-none-elf-gcc: not found
+#     C compiler test failed.
+#
+# which it reports as "aarch64-none-elf-gcc is unable to create an executable
+# file", wording that points at the linker and not at $PATH. The cores build
+# without this only because their Makefiles include devkitA64/base_tools,
+# which spells out absolute tool paths; a bare ./configure has nothing to go
+# on. It also supplies aarch64-none-elf-pkg-config, whose absence configure
+# warns about separately.
+if [ -f "$DEVKITPRO/switchvars.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$DEVKITPRO/switchvars.sh"
+else
+  echo "$DEVKITPRO/switchvars.sh is missing; dkp-toolchain-vars is not installed"
+  exit 1
+fi
+
 PORTLIBS_PREFIX="${PORTLIBS_PREFIX:-$DEVKITPRO/portlibs/switch}"
+
+if ! command -v aarch64-none-elf-gcc >/dev/null 2>&1; then
+  echo "aarch64-none-elf-gcc is still not on PATH after sourcing switchvars.sh"
+  echo "PATH=$PATH"
+  exit 1
+fi
+echo "=== toolchain ==="
+echo "  $(command -v aarch64-none-elf-gcc)"
+echo "  $(aarch64-none-elf-gcc --version | head -1)"
 
 cd "$FFMPEG_SRC"
 
@@ -175,11 +208,23 @@ echo "=== configure ==="
     # configure's own message names the symptom and never the cause. The
     # actual compiler invocation and its error are only in config.log, and
     # without this the job just says "C compiler test failed" and stops.
+    LOG=ffbuild/config.log
+    [ -f "$LOG" ] || LOG=config.log
     echo
-    echo "=== configure failed; last 60 lines of config.log ==="
-    tail -60 ffbuild/config.log 2>/dev/null \
-      || tail -60 config.log 2>/dev/null \
-      || echo "(no config.log was produced)"
+    if [ ! -f "$LOG" ]; then
+      echo "=== configure failed and produced no config.log ==="
+      exit 1
+    fi
+    # The interesting lines first. config.log ends with a few hundred lines of
+    # variable assignments, so a plain tail buries the cause under
+    # wmv3_vdpau_hwaccel_select and friends.
+    echo "=== configure failed; likely cause ==="
+    grep -nE 'not found|No such file|error:|cannot|unable|failed' "$LOG" \
+      | grep -vE "_(deps|select|suggest|extralibs)=" | tail -15 \
+      | sed 's/^/  /' || echo "  (nothing matched the usual markers)"
+    echo
+    echo "=== last 40 lines of $LOG ==="
+    tail -40 "$LOG" | sed 's/^/  /'
     exit 1
   }
 
