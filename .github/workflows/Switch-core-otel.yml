@@ -71,31 +71,52 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # mgba deleted Makefile.libretro on 2026-08-03 and moved the libretro
+          # core to CMake. SWITCH is what its CMakeLists actually tests for in
+          # six places (IS_EMBEDDED, no sqlite/discord/libzip, PNG_ARM_NEON
+          # off); NSWITCH is checked in exactly one, for -ffast-math, so both
+          # are passed. LIBMGBA_ONLY matters: without it the build also
+          # descends into src/platform/switch and builds the standalone
+          # homebrew app, which is not what a libretro core needs.
           - core: mgba
             repo: https://github.com/libretro/mgba
             branch: master
+            buildsys: cmake
             makedir: "."
-            makefile: Makefile.libretro
+            makefile: ""
             submodules: "false"
             extraflags: ""
+            cmakeargs: >-
+              -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=ON -DLIBRETRO_STATIC=ON
+              -DSWITCH=ON -DNSWITCH=ON
+            cmaketarget: mgba_libretro
+            ffmpeg: ""
             patch: ""
           - core: mupen64plus_next
             repo: https://github.com/libretro/mupen64plus-libretro-nx
             branch: develop
+            buildsys: make
             makedir: "."
             makefile: Makefile
             submodules: "false"
             extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
             patch: mupen64plus-libnx4-virtmem.patch
           # m4xw's fork, not hrydgard/ppsspp: this is the one carrying the
           # libnx platform block, and it is what the buildbot recipe names.
           - core: ppsspp
             repo: https://github.com/m4xw/ppsspp
             branch: switch
+            buildsys: make
             makedir: libretro
             makefile: Makefile
             submodules: "true"
             extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: vendored
             patch: ppsspp-libnx4-virtmem.patch
 
     steps:
@@ -195,19 +216,56 @@ jobs:
           git -C core apply --verbose "$P"
           echo "applied $PATCH"
 
+      - name: Build the core's own FFmpeg for Switch
+        env:
+          FFMPEG: ${{ matrix.ffmpeg }}
+        # Only PPSSPP needs this. Its libretro Makefile is the one platform
+        # block that reads ffmpeg out of the portlibs prefix instead of the
+        # submodule the project pins, so it compiles 3.x-era code against
+        # whatever devkitPro ships today. See the script for the full story.
+        run: |
+          if [ "$FFMPEG" != "vendored" ]; then
+            echo "this core uses the ffmpeg already in the image"
+            exit 0
+          fi
+          SRC="$GITHUB_WORKSPACE/core/ffmpeg"
+          if [ ! -f "$SRC/configure" ]; then
+            echo "expected an ffmpeg source tree at $SRC."
+            echo "the submodule is probably not checked out; needs submodules: true"
+            exit 1
+          fi
+          bash "$GITHUB_WORKSPACE/retroarch/.github/scripts/build-ffmpeg-switch.sh" "$SRC"
+
       - name: Build the core as a static library
         working-directory: core
         env:
+          BUILDSYS: ${{ matrix.buildsys }}
           MAKEFILE: ${{ matrix.makefile }}
           MAKEDIR: ${{ matrix.makedir }}
           EXTRAFLAGS: ${{ matrix.extraflags }}
+          CMAKEARGS: ${{ matrix.cmakeargs }}
+          CMAKETARGET: ${{ matrix.cmaketarget }}
         # PPSSPP's libretro Makefile includes Makefile.common relative to its
         # own directory, so it has to be run from there rather than via
         # -f libretro/Makefile from the repository root.
+        #
+        # mgba deleted Makefile.libretro in 8940477 (2026-08-03) and moved the
+        # libretro core to CMake, hence the two build systems here. The cmake
+        # path goes through devkitPro's aarch64-none-elf-cmake wrapper, which
+        # is nothing more than cmake with CMAKE_TOOLCHAIN_FILE preset to
+        # Switch.cmake; invoking cmake directly silently builds for the host.
         run: |
-          # shellcheck disable=SC2086
-          make -C "$MAKEDIR" -f "$MAKEFILE" platform=libnx $EXTRAFLAGS \
-            -j"$(getconf _NPROCESSORS_ONLN)"
+          J="$(getconf _NPROCESSORS_ONLN)"
+          if [ "$BUILDSYS" = "cmake" ]; then
+            CM="$DEVKITPRO/portlibs/switch/bin/aarch64-none-elf-cmake"
+            [ -x "$CM" ] || { echo "missing $CM (switch-cmake)"; exit 1; }
+            # shellcheck disable=SC2086
+            "$CM" -DCMAKE_BUILD_TYPE=Release $CMAKEARGS -S "$MAKEDIR" -B build
+            cmake --build build --target "$CMAKETARGET" -j"$J"
+          else
+            # shellcheck disable=SC2086
+            make -C "$MAKEDIR" -f "$MAKEFILE" platform=libnx $EXTRAFLAGS -j"$J"
+          fi
           echo "--- static libraries produced ---"
           find . -name "*.a" -size +100k | head
 
