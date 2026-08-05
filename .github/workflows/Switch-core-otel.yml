@@ -159,19 +159,33 @@ jobs:
             cmaketarget: ""
             ffmpeg: ""
             patch: ""
-          # melonDS ships its Switch support on a 'switch' branch, not master.
-          - core: melonds
-            repo: https://github.com/libretro/melonDS
-            branch: switch
-            buildsys: make
-            makedir: "."
-            makefile: Makefile
-            submodules: "false"
-            extraflags: ""
-            cmakeargs: ""
-            cmaketarget: ""
-            ffmpeg: ""
-            patch: melonds-gcc15.patch
+          # melonDS is deliberately absent.
+          #
+          # It builds (see .github/patches/melonds-gcc15.patch, which fixes
+          # four separate GCC 15 and libnx 4.x breakages) and then fails to
+          # link against this RetroArch:
+          #
+          #     undefined reference to `memstream_set_buffer'
+          #     undefined reference to `fill_pathname_base_noext'
+          #
+          # Not a missing file. melonDS excludes its bundled libretro-common
+          # under STATIC_LINKING on purpose, expecting the frontend to supply
+          # it, and RetroArch's libretro-common has since changed the API:
+          #
+          #     melonDS   memstream_set_buffer(buf, size); memstream_open(w)
+          #     RetroArch memstream_open(buf, size, w)
+          #
+          # The buffer moved from global state into the call. Supplying the
+          # two missing symbols as shims would link and then pass garbage
+          # arguments, which on this path means corrupted save states. A core
+          # that fails to build beats one that quietly eats saves.
+          #
+          # Making it work means porting melonDS's save state and ROM param
+          # code to the current memstream API, which is emulator surgery and
+          # cannot be validated without DS ROMs on hardware.
+          #
+          # The stock buildbot core on the card still plays DS games. It just
+          # reports no telemetry, like the other cores did before tonight.
           - core: nestopia
             repo: https://github.com/libretro/nestopia
             branch: master
