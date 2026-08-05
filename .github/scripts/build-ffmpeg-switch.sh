@@ -118,6 +118,27 @@ CFLAGS_NX="-D__SWITCH__ -D_GNU_SOURCE -O2 -march=armv8-a -mtune=cortex-a57"
 CFLAGS_NX="$CFLAGS_NX -mtp=soft -fPIC -ftls-model=local-exec"
 CFLAGS_NX="$CFLAGS_NX -I$PORTLIBS_PREFIX/include -I$DEVKITPRO/libnx/include"
 
+# configure decides what exists by compiling and LINKING small programs, so it
+# needs to be able to produce an executable even though the output here is a
+# static library. Without switch.specs the linker has no startup files or
+# entry point for this target and every probe fails identically, which
+# configure reports as
+#
+#     aarch64-none-elf-gcc is unable to create an executable file.
+#     C compiler test failed.
+#
+# devkitPro's own switchvars.sh does not set this, because their packages are
+# built by makepkg with it already in the environment. RetroArch's
+# Makefile.libnx and mupen64plus's libnx block both pass it explicitly, and so
+# does this.
+LDFLAGS_NX="-specs=$DEVKITPRO/libnx/switch.specs"
+LDFLAGS_NX="$LDFLAGS_NX -L$PORTLIBS_PREFIX/lib -L$DEVKITPRO/libnx/lib"
+
+if [ ! -f "$DEVKITPRO/libnx/switch.specs" ]; then
+  echo "switch.specs is missing from $DEVKITPRO/libnx, nothing will link"
+  exit 1
+fi
+
 echo "=== configure ==="
 # shellcheck disable=SC2086
 ./configure \
@@ -131,7 +152,7 @@ echo "=== configure ==="
   --disable-shared \
   --enable-static \
   --extra-cflags="$CFLAGS_NX" \
-  --extra-ldflags="-fPIE -L$PORTLIBS_PREFIX/lib -L$DEVKITPRO/libnx/lib" \
+  --extra-ldflags="$LDFLAGS_NX" \
   --extra-libs="-lnx" \
   --disable-runtime-cpudetect \
   --disable-programs \
@@ -150,7 +171,17 @@ echo "=== configure ==="
   $DEMUXERS \
   $PARSERS \
   $ENCODERS \
-  --enable-protocol=file
+  --enable-protocol=file || {
+    # configure's own message names the symptom and never the cause. The
+    # actual compiler invocation and its error are only in config.log, and
+    # without this the job just says "C compiler test failed" and stops.
+    echo
+    echo "=== configure failed; last 60 lines of config.log ==="
+    tail -60 ffbuild/config.log 2>/dev/null \
+      || tail -60 config.log 2>/dev/null \
+      || echo "(no config.log was produced)"
+    exit 1
+  }
 
 echo "=== build ==="
 make -j"$(getconf _NPROCESSORS_ONLN)"
