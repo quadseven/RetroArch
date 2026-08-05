@@ -148,8 +148,16 @@ jobs:
             exit 1
           fi
           echo
-          echo "libnx version: $(sed -n 's/^VERSION[[:space:]]*=[[:space:]]*//p' \
-            "$DEVKITPRO/libnx/switch_rules" 2>/dev/null || echo unknown)"
+          # -Q queries the local database only and never touches the network,
+          # unlike the -Sy this step replaced. Worth printing: a core that
+          # stops compiling usually means one of these moved under it, and
+          # having the versions in the log turns "why did this break" into a
+          # diff. PPSSPP's failure is exactly this, ffmpeg 4 code against
+          # whatever switch-ffmpeg happens to be today.
+          echo "toolchain versions baked into the image:"
+          dkp-pacman -Q libnx switch-ffmpeg switch-mesa switch-zlib \
+            switch-libpng switch-mbedtls 2>/dev/null | sed 's/^/  /' \
+            || echo "  (could not query the local package database)"
 
       - name: Clone the core
         env:
