@@ -15,6 +15,20 @@ name: CI Switch core with OTLP
 # The buildbot publishes only finished .nro files and no .a, so each core is
 # compiled from source here and handed to the RetroArch link step.
 #
+# Each core's repo and branch below is taken from libretro-super's own
+# recipes/nintendo/libnx, which is what the buildbot actually builds. Two of
+# them are not the obvious choice and were the reason this workflow failed for
+# a month:
+#
+#   mupen64plus_next  builds from develop, not the default branch
+#   ppsspp            builds from m4xw/ppsspp branch switch, NOT hrydgard's
+#                     upstream, whose libretro Makefile has no libnx platform
+#                     at all and answers "Nothing to be done for 'all'"
+#
+# When a core is broken against the current toolchain, the fix goes in
+# .github/patches/ and is applied after cloning. Any patch that stops applying
+# fails the build rather than being skipped.
+#
 # This runs on push rather than workflow_dispatch because GitHub only
 # registers dispatchable workflows from the default branch, and this work
 # lives on a feature branch.
@@ -23,6 +37,7 @@ on:
   push:
     paths:
       - ".github/workflows/Switch-core-otel.yml"
+      - ".github/patches/**"
       - "otlp_log_exporter.c"
       - "otlp_log_exporter.h"
       - "Makefile.libnx"
@@ -49,22 +64,30 @@ jobs:
         include:
           - core: mgba
             repo: https://github.com/libretro/mgba
+            branch: master
             makedir: "."
             makefile: Makefile.libretro
             submodules: "false"
             extraflags: ""
+            patch: ""
           - core: mupen64plus_next
             repo: https://github.com/libretro/mupen64plus-libretro-nx
+            branch: develop
             makedir: "."
             makefile: Makefile
             submodules: "false"
             extraflags: ""
+            patch: mupen64plus-libnx4-virtmem.patch
+          # m4xw's fork, not hrydgard/ppsspp: this is the one carrying the
+          # libnx platform block, and it is what the buildbot recipe names.
           - core: ppsspp
-            repo: https://github.com/hrydgard/ppsspp
+            repo: https://github.com/m4xw/ppsspp
+            branch: switch
             makedir: libretro
             makefile: Makefile
             submodules: "true"
-            extraflags: STATIC_LINKING=1
+            extraflags: ""
+            patch: ""
 
     steps:
       - name: Checkout RetroArch (this fork, with the exporter)
@@ -85,14 +108,38 @@ jobs:
       - name: Clone the core
         env:
           REPO: ${{ matrix.repo }}
+          BRANCH: ${{ matrix.branch }}
           SUBMODULES: ${{ matrix.submodules }}
+        # The branch is always named explicitly. Cloning the default branch
+        # silently builds something other than what the buildbot builds, which
+        # is how the N64 core ended up compiled from a branch nobody ships.
         run: |
           if [ "$SUBMODULES" = "true" ]; then
-            git clone --depth 1 --recursive "$REPO" core
+            git clone --depth 1 --branch "$BRANCH" --recursive "$REPO" core
           else
-            git clone --depth 1 "$REPO" core
+            git clone --depth 1 --branch "$BRANCH" "$REPO" core
           fi
-          echo "core checked out at $(git -C core rev-parse --short HEAD)"
+          echo "core checked out at $BRANCH $(git -C core rev-parse --short HEAD)"
+
+      - name: Patch the core for the current toolchain
+        env:
+          PATCH: ${{ matrix.patch }}
+        # A patch that no longer applies means upstream moved and the fix needs
+        # rewriting. Failing here is the point: silently building unpatched
+        # would either fail later with an unrelated-looking error or, worse,
+        # succeed and ship a core with a known defect in it.
+        run: |
+          if [ -z "$PATCH" ]; then
+            echo "no patch for this core"
+            exit 0
+          fi
+          P="$GITHUB_WORKSPACE/retroarch/.github/patches/$PATCH"
+          if [ ! -f "$P" ]; then
+            echo "patch $PATCH is named in the matrix but not present at $P"
+            exit 1
+          fi
+          git -C core apply --verbose "$P"
+          echo "applied $PATCH"
 
       - name: Build the core as a static library
         working-directory: core
