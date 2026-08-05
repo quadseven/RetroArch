@@ -32,6 +32,13 @@ typedef struct
    int64_t  time_unix_nano;
    int      severity_number;
    char     severity_text[8];
+   /* Empty for a line from RARCH_LOG and friends, which is the common case.
+    * "stdout" or "stderr" for a raw write picked up by the capture in
+    * platform_switch.c, emitted as a log.source attribute. Worth telling
+    * apart: a RetroArch log line carries a real level, a raw write does
+    * not, and a core that printf()s is a different thing from one using
+    * the libretro log callback. */
+   char     source[8];
    char     body[OTLP_MAX_LINE];
 } otlp_record_t;
 
@@ -256,7 +263,18 @@ static char *otlp_build_payload(const otlp_record_t *batch, unsigned n)
       otlp_append(out, cap, batch[i].severity_text);
       otlp_append(out, cap, "\",\"body\":{\"stringValue\":\"");
       otlp_append_escaped(out, cap, batch[i].body);
-      otlp_append(out, cap, "\"}}");
+      otlp_append(out, cap, "\"}");
+      /* Only raw writes carry a source. Emitting it unconditionally would
+       * put an empty attribute on every ordinary line and cost payload
+       * size on the hottest path for nothing. */
+      if (batch[i].source[0])
+      {
+         otlp_append(out, cap,
+               ",\"attributes\":[{\"key\":\"log.source\",\"value\":{\"stringValue\":\"");
+         otlp_append_escaped(out, cap, batch[i].source);
+         otlp_append(out, cap, "\"}}]");
+      }
+      otlp_append(out, cap, "}");
    }
 
    otlp_append(out, cap, "]}]}]}");
@@ -585,15 +603,9 @@ bool otlp_log_exporter_enabled(void)
    return otlp_st.running;
 }
 
-void otlp_log_exporter_log(const char *tag, const char *line)
+static void otlp_enqueue(int severity, const char *source, const char *line)
 {
    otlp_record_t *rec;
-   int severity;
-
-   if (!line || !*line)
-      return;
-
-   severity = otlp_severity_number(tag);
 
    slock_lock(otlp_st.lock);
 
@@ -621,6 +633,7 @@ void otlp_log_exporter_log(const char *tag, const char *line)
       rec->severity_number = severity;
       strlcpy(rec->severity_text, otlp_severity_text(severity),
             sizeof(rec->severity_text));
+      strlcpy(rec->source, source ? source : "", sizeof(rec->source));
       strlcpy(rec->body, line, sizeof(rec->body));
    }
 
@@ -628,6 +641,24 @@ void otlp_log_exporter_log(const char *tag, const char *line)
 
    slock_unlock(otlp_st.lock);
    scond_signal(otlp_st.cond);
+}
+
+void otlp_log_exporter_log(const char *tag, const char *line)
+{
+   if (!line || !*line)
+      return;
+   otlp_enqueue(otlp_severity_number(tag), NULL, line);
+}
+
+void otlp_log_exporter_log_raw(const char *line, bool is_stderr)
+{
+   if (!line || !*line)
+      return;
+   /* A raw write carries no level. stderr is reported one step above stdout
+    * because callers overwhelmingly use it for failures, but neither is a
+    * real severity and log.source is what actually says where it came from.
+    * 9 is INFO and 13 is WARN in the OTLP severity numbering. */
+   otlp_enqueue(is_stderr ? 13 : 9, is_stderr ? "stderr" : "stdout", line);
 }
 
 void otlp_log_exporter_set_suspended(bool suspended)

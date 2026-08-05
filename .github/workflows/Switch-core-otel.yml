@@ -123,6 +123,92 @@ jobs:
             cmaketarget: ""
             ffmpeg: vendored
             patch: ppsspp-libnx4-virtmem.patch
+          - core: flycast
+            repo: https://github.com/libretro/flycast
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: gambatte
+            repo: https://github.com/libretro/gambatte-libretro
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: genesis_plus_gx
+            repo: https://github.com/libretro/Genesis-Plus-GX
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile.libretro
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          # melonDS ships its Switch support on a 'switch' branch, not master.
+          - core: melonds
+            repo: https://github.com/libretro/melonDS
+            branch: switch
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: nestopia
+            repo: https://github.com/libretro/nestopia
+            branch: master
+            buildsys: make
+            makedir: "libretro"
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          # DYNAREC=0 per the buildbot recipe: the ARM dynarec is not used on this target.
+          - core: pcsx_rearmed
+            repo: https://github.com/libretro/pcsx_rearmed
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile.libretro
+            submodules: "true"
+            extraflags: "DYNAREC=0"
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: snes9x
+            repo: https://github.com/libretro/snes9x
+            branch: master
+            buildsys: make
+            makedir: "libretro"
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
 
     steps:
       - name: Checkout RetroArch (this fork, with the exporter)

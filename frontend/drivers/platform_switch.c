@@ -55,6 +55,12 @@
 #include "../../retroarch.h"
 #ifdef HAVE_OTLP_LOG_EXPORT
 #include "../../otlp_log_exporter.h"
+/* devoptab_t, devoptab_list, STD_OUT and STD_ERR for the stdout capture
+ * below. Comes from devkitA64's newlib rather than from libnx. */
+#include <sys/iosupport.h>
+/* slock_t for the capture's line buffers, which are written from whichever
+ * thread happened to call printf. */
+#include <rthreads/rthreads.h>
 #endif
 #include "../../verbosity.h"
 
@@ -235,6 +241,170 @@ static void get_first_valid_core(char *path_return, size_t len)
 }
 #endif
 
+#ifdef HAVE_OTLP_LOG_EXPORT
+/* ------------------------------------------------------------------
+ * Raw stdout and stderr capture.
+ *
+ * nxlink is nothing more than
+ *
+ *     dup2(sock, STDOUT_FILENO);
+ *     dup2(sock, STDERR_FILENO);
+ *
+ * pointing the descriptors at a socket back to a PC. This performs the same
+ * interception without the PC, by swapping the device behind them for one
+ * that assembles lines and hands them to the exporter. It is the mechanism
+ * libnx's own consoleInit uses to put stdout on the screen.
+ *
+ * Re-entrancy is prevented by construction, not by a guard: nothing below
+ * writes to stdout or stderr, and otlp_log_exporter_log_raw only takes a
+ * lock and copies into a ring. A printf anywhere on this path would recurse,
+ * and the lock would turn that into a deadlock. Keep it silent.
+ * ------------------------------------------------------------------ */
+
+#define SWITCH_CAPTURE_PENDING 2048
+
+typedef struct
+{
+   char   buf[SWITCH_CAPTURE_PENDING];
+   size_t len;
+   bool   is_stderr;
+} switch_capture_buf_t;
+
+static switch_capture_buf_t switch_capture_out;
+static switch_capture_buf_t switch_capture_err;
+static slock_t             *switch_capture_lock;
+static bool                 switch_capture_active;
+
+static void switch_capture_drain(switch_capture_buf_t *b,
+      const char *data, size_t len)
+{
+   size_t i;
+
+   for (i = 0; i < len; i++)
+   {
+      char c = data[i];
+
+      if (c == '\n')
+      {
+         size_t end = b->len;
+         /* Trailing CR, so a library writing \r\n leaves none on the body. */
+         if (end > 0 && b->buf[end - 1] == '\r')
+            end--;
+         if (end > 0)
+         {
+            b->buf[end] = '\0';
+            otlp_log_exporter_log_raw(b->buf, b->is_stderr);
+         }
+         b->len = 0;
+         continue;
+      }
+
+      if (b->len + 1 >= sizeof(b->buf))
+      {
+         /* A caller that never emits a newline would otherwise grow this
+          * without bound. Ship what we have and carry on rather than drop. */
+         b->buf[b->len] = '\0';
+         otlp_log_exporter_log_raw(b->buf, b->is_stderr);
+         b->len = 0;
+      }
+
+      b->buf[b->len++] = c;
+   }
+}
+
+static ssize_t switch_capture_write_out(struct _reent *r, void *fd,
+      const char *ptr, size_t len)
+{
+   (void)r; (void)fd;
+   if (ptr && len && switch_capture_lock)
+   {
+      slock_lock(switch_capture_lock);
+      switch_capture_drain(&switch_capture_out, ptr, len);
+      slock_unlock(switch_capture_lock);
+   }
+   /* Report everything consumed; a short count makes stdio retry the tail
+    * and duplicate what was already buffered. */
+   return (ssize_t)len;
+}
+
+static ssize_t switch_capture_write_err(struct _reent *r, void *fd,
+      const char *ptr, size_t len)
+{
+   (void)r; (void)fd;
+   if (ptr && len && switch_capture_lock)
+   {
+      slock_lock(switch_capture_lock);
+      switch_capture_drain(&switch_capture_err, ptr, len);
+      slock_unlock(switch_capture_lock);
+   }
+   return (ssize_t)len;
+}
+
+/* Same shape as libnx's dotab_stdout: a device implementing only write_r.
+ * Must be static storage, devoptab_list keeps the pointer for good. */
+static const devoptab_t switch_capture_dotab_out = {
+   .name    = "otel-out",
+   .write_r = switch_capture_write_out,
+};
+
+static const devoptab_t switch_capture_dotab_err = {
+   .name    = "otel-err",
+   .write_r = switch_capture_write_err,
+};
+
+static void switch_stdout_capture_init(const char *config_dir)
+{
+   char path[512];
+   FILE *flag;
+
+   if (switch_capture_active)
+      return;
+
+   /* Presence is the switch; contents ignored. Same convention as the other
+    * otel-* files read from this directory. */
+   snprintf(path, sizeof(path), "%s/otel-capture-stdout", config_dir);
+   if (!(flag = fopen(path, "r")))
+      return;
+   fclose(flag);
+
+   /* Nothing to capture into. Installing anyway would swallow every write
+    * and send it nowhere, which is worse than leaving it alone. */
+   if (!otlp_log_exporter_enabled())
+   {
+      RARCH_WARN("[OTLP] capture requested but no endpoint is configured\n");
+      return;
+   }
+
+   if (!(switch_capture_lock = slock_new()))
+      return;
+
+   switch_capture_out.is_stderr = false;
+   switch_capture_err.is_stderr = true;
+
+   /* Unbuffered, so a line reaches the capture when it is written rather
+    * than when stdio decides the block is full. A crash with the useful
+    * line still in a stdio buffer is the failure this exists to avoid. */
+   setvbuf(stdout, NULL, _IONBF, 0);
+   devoptab_list[STD_OUT] = &switch_capture_dotab_out;
+
+   /* stderr only when RetroArch's own log is going to a file. The default
+    * sink is stderr (verbosity.c sets main_verbosity_st.fp = stderr), so
+    * capturing it while that is true would export every RARCH_LOG line
+    * twice: once through the logging path with a real severity, once as a
+    * raw record without one. */
+   if (is_logging_to_file())
+   {
+      setvbuf(stderr, NULL, _IONBF, 0);
+      devoptab_list[STD_ERR] = &switch_capture_dotab_err;
+      RARCH_LOG("[OTLP] capturing stdout and stderr\n");
+   }
+   else
+      RARCH_LOG("[OTLP] capturing stdout only; stderr is RetroArch's own log sink\n");
+
+   switch_capture_active = true;
+}
+#endif /* HAVE_OTLP_LOG_EXPORT */
+
 static void frontend_switch_get_env(
       int *argc, char *argv[], void *args, void *params_data)
 {
@@ -256,6 +426,18 @@ static void frontend_switch_get_env(
     * Opt in only: does nothing unless SD_PREFIX/retroarch/otel-endpoint
     * exists. */
    otlp_log_exporter_init(SD_PREFIX "/retroarch");
+
+   /* And everything that never goes through RARCH_LOG at all.
+    *
+    * Well behaved libretro cores take the log callback from
+    * RETRO_ENVIRONMENT_GET_LOG_INTERFACE and reach the exporter already.
+    * Plenty do not: they printf, or the libraries they pull in do, and that
+    * output has nowhere to go on a console with no nxlink attached. It is
+    * exactly what a developer with a PC on the network can see and we
+    * cannot.
+    *
+    * Opt in via SD_PREFIX/retroarch/otel-capture-stdout. */
+   switch_stdout_capture_init(SD_PREFIX "/retroarch");
 #endif
 
    fill_pathname_basedir(g_defaults.dirs[DEFAULT_DIR_PORT], SD_PREFIX "/retroarch/retroarch_switch.nro", sizeof(g_defaults.dirs[DEFAULT_DIR_PORT]));

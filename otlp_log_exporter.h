@@ -61,6 +61,24 @@ bool otlp_log_exporter_enabled(void);
 void otlp_log_exporter_log(const char *tag, const char *line);
 
 /**
+ * otlp_log_exporter_log_raw:
+ * @line       : one line, no trailing newline.
+ * @is_stderr  : which descriptor it came from.
+ *
+ * Buffers a line that did not come from RARCH_LOG. This is how the stdout
+ * capture in platform_switch.c hands over raw writes: printf from libretro
+ * cores and from the libraries they pull in, none of which reaches the
+ * logging macros and all of which is invisible otherwise.
+ *
+ * Recorded with a log.source attribute so a raw write is not mistaken for a
+ * line that carries a real severity.
+ *
+ * Nothing this reaches may write to stdout or stderr; doing so would feed
+ * the capture its own output.
+ */
+void otlp_log_exporter_log_raw(const char *line, bool is_stderr);
+
+/**
  * otlp_log_exporter_deinit:
  *
  * Stops the worker after a final flush attempt.
