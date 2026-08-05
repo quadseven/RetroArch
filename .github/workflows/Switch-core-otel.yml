@@ -87,7 +87,7 @@ jobs:
             makefile: Makefile
             submodules: "true"
             extraflags: ""
-            patch: ""
+            patch: ppsspp-libnx4-virtmem.patch
 
     steps:
       - name: Checkout RetroArch (this fork, with the exporter)

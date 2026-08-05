@@ -1,0 +1,85 @@
+Restore the Switch memory arena on libnx 4.x.
+
+libnx 4.0 removed virtmemReserve(), so Find4GBBase() stopped compiling:
+
+    Common/MemArenaPosix.cpp:182:41: error: 'virtmemReserve' was not
+    declared in this scope; did you mean 'VirtmemReservation'?
+
+Unlike the single reservation in mupen64plus, this file reserves two
+ranges and they need different finders, because they are consumed by
+different syscalls:
+
+    memoryBase      returned as the 4GB base; CreateView() maps into it
+                    with svcMapProcessMemory, which wants general
+                    purpose address space   -> virtmemFindAslr
+
+    memoryCodeBase  passed to svcMapProcessCodeMemory and then to
+                    svcSetProcessMemoryPermission, so it has to live in
+                    the code region         -> virtmemFindCodeMemory
+
+Reaching for one finder for both is the easy mistake here: it compiles
+and then fails at the map call with a result code and no hint as to why.
+
+The 0x1000 guard matches what libnx 3.x virtmemReserve did internally.
+
+ReleaseSpace() is left alone. Its virtmemFree() calls were already
+commented out upstream and the bases are never zeroed, so the two
+reservations are deliberately held for the life of the process; the
+!memoryBase guards mean this runs once, not per view.
+
+diff --git a/Common/MemArenaPosix.cpp b/Common/MemArenaPosix.cpp
+index d64a87a..6e2d7d8 100644
+--- a/Common/MemArenaPosix.cpp
++++ b/Common/MemArenaPosix.cpp
+@@ -47,6 +47,8 @@ static const std::string tmpfs_ram_temp_file = "/dev/shm/gc_mem.tmp";
+ static uintptr_t memoryBase = 0;
+ static uintptr_t memoryCodeBase = 0;
+ static uintptr_t memorySrcBase = 0;
++static VirtmemReservation *memoryBaseReservation = nullptr;
++static VirtmemReservation *memoryCodeBaseReservation = nullptr;
+ #endif
+ 
+ // do not make this "static"
+@@ -178,11 +180,37 @@ u8* MemArena::Find4GBBase() {
+ 	// This makes the Windows approach above unusable on Linux, so we will simply pray...
+ 	memorySrcBase = (uintptr_t)memalign(0x1000, 0x10000000);
+ 
+-	if(!memoryBase)
+-		memoryBase = (uintptr_t)virtmemReserve(0x10000000);
+-	
+-	if(!memoryCodeBase)
+-		memoryCodeBase = (uintptr_t)virtmemReserve(0x10000000);
++	// libnx 4.0 removed virtmemReserve in favour of an explicit
++	// find-then-reserve pair. The two bases are NOT interchangeable and do
++	// not use the same finder:
++	//
++	//   memoryBase      is handed back as the 4GB base and CreateView maps
++	//                   into it with svcMapProcessMemory, so it needs
++	//                   general purpose address space -> virtmemFindAslr
++	//   memoryCodeBase  is passed to svcMapProcessCodeMemory and then to
++	//                   svcSetProcessMemoryPermission, so it has to sit in
++	//                   the code region -> virtmemFindCodeMemory
++	//
++	// Using one finder for both compiles cleanly and then fails at the map.
++	if(!memoryBase) {
++		virtmemLock();
++		memoryBase = (uintptr_t)virtmemFindAslr(0x10000000, 0x1000);
++		if(memoryBase)
++			memoryBaseReservation = virtmemAddReservation((void*)memoryBase, 0x10000000);
++		virtmemUnlock();
++		if(!memoryBaseReservation)
++			printf("Failed to reserve the view base...\n");
++	}
++
++	if(!memoryCodeBase) {
++		virtmemLock();
++		memoryCodeBase = (uintptr_t)virtmemFindCodeMemory(0x10000000, 0x1000);
++		if(memoryCodeBase)
++			memoryCodeBaseReservation = virtmemAddReservation((void*)memoryCodeBase, 0x10000000);
++		virtmemUnlock();
++		if(!memoryCodeBaseReservation)
++			printf("Failed to reserve the code base...\n");
++	}
+ 
+ 	if(R_FAILED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64) memoryCodeBase, (u64) memorySrcBase, 0x10000000)))
+ 		printf("Failed to Map memory...\n");
