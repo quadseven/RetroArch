@@ -36,8 +36,13 @@ name: CI Switch core with OTLP
 on:
   push:
     paths:
+      # Everything this workflow actually executes. A commit touching only the
+      # ffmpeg build script once produced no run at all: the push succeeded,
+      # nothing was queued, and it looked exactly like a job that had not
+      # started yet. If a step runs a file, that file belongs on this list.
       - ".github/workflows/Switch-core-otel.yml"
       - ".github/patches/**"
+      - ".github/scripts/**"
       - "otlp_log_exporter.c"
       - "otlp_log_exporter.h"
       - "Makefile.libnx"
