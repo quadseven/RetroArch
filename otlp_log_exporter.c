@@ -19,6 +19,58 @@
 static void otlp_write_status(const char *fmt, ...);
 #include "file_path_special.h"
 
+#ifdef __SWITCH__
+#include <switch.h>
+
+/*
+ * Wall clock on this console is whole seconds. time() is all that newlib
+ * offers, so every record written inside the same second used to carry an
+ * identical timestamp and could not be put in order at all. For a crash where
+ * the interesting events are 3ms apart that is the difference between a
+ * usable log and a pile of lines.
+ *
+ * armGetSystemTick is a monotonic counter with a known frequency. Anchor it
+ * to time() once at startup and interpolate from there: the wall clock stays
+ * correct to the second and everything within that second is ordered properly.
+ * The anchor is only ever read, never re-taken, so records cannot go backwards
+ * if the RTC is adjusted underneath us.
+ */
+static int64_t otlp_epoch_ns_at_anchor;
+static uint64_t otlp_tick_at_anchor;
+
+static void otlp_clock_anchor(void)
+{
+   otlp_epoch_ns_at_anchor = (int64_t)time(NULL) * 1000000000LL;
+   otlp_tick_at_anchor     = armGetSystemTick();
+}
+
+static int64_t otlp_now_ns(void)
+{
+   if (!otlp_tick_at_anchor)
+      return (int64_t)time(NULL) * 1000000000LL;
+   return otlp_epoch_ns_at_anchor +
+          (int64_t)armTicksToNs(armGetSystemTick() - otlp_tick_at_anchor);
+}
+
+/* Which thread emitted a line. Without this, two events milliseconds apart
+ * are indistinguishable from one thread doing two things and two threads
+ * racing, and that distinction is usually the entire question. */
+static uint64_t otlp_thread_id(void)
+{
+   u64 tid = 0;
+   if (R_FAILED(svcGetThreadId(&tid, threadGetCurHandle())))
+      return 0;
+   return tid;
+}
+#else
+static void otlp_clock_anchor(void) { }
+static int64_t otlp_now_ns(void)
+{
+   return (int64_t)time(NULL) * 1000000000LL;
+}
+static uint64_t otlp_thread_id(void) { return 0; }
+#endif
+
 /* Bounded so a runaway log cannot grow memory without limit. Dropping the
  * oldest is the right trade: the newest records describe what is happening
  * now, which is what anyone reading them wants. */
@@ -39,6 +91,9 @@ typedef struct
     * not, and a core that printf()s is a different thing from one using
     * the libretro log callback. */
    char     source[8];
+   /* 0 when unavailable. Emitted as thread.id so a query can separate one
+    * thread doing two things from two threads racing. */
+   uint64_t thread_id;
    char     body[OTLP_MAX_LINE];
 } otlp_record_t;
 
@@ -264,15 +319,36 @@ static char *otlp_build_payload(const otlp_record_t *batch, unsigned n)
       otlp_append(out, cap, "\",\"body\":{\"stringValue\":\"");
       otlp_append_escaped(out, cap, batch[i].body);
       otlp_append(out, cap, "\"}");
-      /* Only raw writes carry a source. Emitting it unconditionally would
-       * put an empty attribute on every ordinary line and cost payload
-       * size on the hottest path for nothing. */
-      if (batch[i].source[0])
+      /* Attributes, when there is anything worth saying. log.source only
+       * appears on raw writes; thread.id whenever the kernel gave us one.
+       * Emitting empties on every line would cost payload size on the
+       * hottest path for nothing. */
+      if (batch[i].source[0] || batch[i].thread_id)
       {
-         otlp_append(out, cap,
-               ",\"attributes\":[{\"key\":\"log.source\",\"value\":{\"stringValue\":\"");
-         otlp_append_escaped(out, cap, batch[i].source);
-         otlp_append(out, cap, "\"}}]");
+         int wrote = 0;
+         otlp_append(out, cap, ",\"attributes\":[");
+         if (batch[i].source[0])
+         {
+            otlp_append(out, cap,
+                  "{\"key\":\"log.source\",\"value\":{\"stringValue\":\"");
+            otlp_append_escaped(out, cap, batch[i].source);
+            otlp_append(out, cap, "\"}}");
+            wrote = 1;
+         }
+         if (batch[i].thread_id)
+         {
+            if (wrote)
+               otlp_append(out, cap, ",");
+            /* String, not a JSON number: this is a u64 and JSON cannot
+             * carry that range without losing the low bits. */
+            otlp_append(out, cap,
+                  "{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"");
+            snprintf(num, sizeof(num), "%llu",
+                  (unsigned long long)batch[i].thread_id);
+            otlp_append(out, cap, num);
+            otlp_append(out, cap, "\"}}");
+         }
+         otlp_append(out, cap, "]");
       }
       otlp_append(out, cap, "}");
    }
@@ -453,6 +529,9 @@ static void otlp_worker(void *unused)
 
 bool otlp_log_exporter_init(const char *config_dir)
 {
+   /* Before anything can be timestamped. */
+   otlp_clock_anchor();
+
    char endpoint[512];
    size_t len;
 
@@ -627,9 +706,8 @@ static void otlp_enqueue(int severity, const char *source, const char *line)
       otlp_st.count++;
 
    {
-      /* time() is second resolution, which is all that is portable here.
-       * OTLP wants nanoseconds. */
-      rec->time_unix_nano  = (int64_t)time(NULL) * 1000000000LL;
+      rec->time_unix_nano  = otlp_now_ns();
+      rec->thread_id       = otlp_thread_id();
       rec->severity_number = severity;
       strlcpy(rec->severity_text, otlp_severity_text(severity),
             sizeof(rec->severity_text));
