@@ -1,0 +1,208 @@
+Build the DS core against devkitA64 GCC 15.2.0 and libnx 4.x.
+
+melonDS is the last core still failing, and it failed for four different
+reasons across four builds. All of them come from the same place: the
+buildbot pins an older toolchain, this builds on the current one.
+
+1. A real defect a lenient compiler had been waving through:
+
+       rsemaphore.c:104: 'return' with no value, in function returning
+       non-void
+
+   ssem_trywait returns bool and its null check returned nothing. false is
+   the only defensible value; every caller reads the result as "did I get
+   it".
+
+2. Declarations that used to arrive transitively and no longer do, which is
+   libstdc++ tightening its own includes rather than melonDS changing:
+   <ctime> for time(), <limits> for std::numeric_limits, and <algorithm>
+   for std::min and std::max across five more files. Those five were found
+   by scanning every source for a std symbol whose header it never
+   includes, rather than waiting for each to surface a build at a time.
+
+3. libnx 4.0's removal of virtmemReserve, which now makes melonDS the
+   fourth core hit by it after mupen64plus, PPSSPP and flycast. There is
+   only one call here and it feeds svcMapProcessMemory, so it wants general
+   purpose address space; JitRXStart is found separately by scanning with
+   svcQueryMemory and needs nothing. The reservation is held in a new member
+   so the destructor can release it, where virtmemFree used to sit, since
+   that call was a documented no-op and its replacement is not.
+
+   The member is void* rather than VirtmemReservation*. This class lives in
+   namespace ARMJIT, so a forward declaration in the header declares
+   ARMJIT::VirtmemReservation, which is a different type from libnx's global
+   one and does not convert to it. Including <switch.h> to name it properly
+   would pull that header into every translation unit including this file,
+   to store a single pointer. The casts sit at the two use sites in the .cpp,
+   which includes <switch.h> anyway.
+
+4. offsetof with a runtime index:
+
+       ARMJIT_Compiler.cpp:236: 'reg' is not a constant expression
+
+   offsetof(ARM, R[reg]) is undefined behaviour that compilers accepted for
+   years and GCC 15 rejects. Rewritten as offsetof(ARM, R) + sizeof(u32) *
+   reg, which is the same address by definition and actually legal. The
+   offsetof(ARM, R[15]) a few lines away is fine and untouched: a constant
+   index has always been valid.
+
+Files belonging to the desktop frontend and the x64 JIT are deliberately
+left alone. Neither is in an aarch64 libretro build.
+
+diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.cpp b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+index 50e33fc..8541d53 100644
+--- a/src/ARMJIT_A64/ARMJIT_Compiler.cpp
++++ b/src/ARMJIT_A64/ARMJIT_Compiler.cpp
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ #include "ARMJIT_Compiler.h"
+ 
+ #include "../ARMInterpreter.h"
+@@ -52,7 +53,14 @@ Compiler::Compiler()
+     JitRWBase = memalign(0x1000, JitMemSize);
+ 
+     JitRXStart = (u8*)&__start__ - JitMemSize - 0x1000;
+-    JitRWStart = virtmemReserve(JitMemSize);
++    /* libnx 4.0 removed virtmemReserve. This address is handed to
++       svcMapProcessMemory below, so it needs general purpose address space;
++       JitRXStart is found separately by scanning with svcQueryMemory and is
++       not affected. The 0x1000 guard matches the old call. */
++    virtmemLock();
++    JitRWStart = virtmemFindAslr(JitMemSize, 0x1000);
++    JitRWReservation = JitRWStart ? (void*)virtmemAddReservation(JitRWStart, JitMemSize) : NULL;
++    virtmemUnlock();
+     MemoryInfo info = {0};
+     u32 pageInfo = {0};
+     int i = 0;
+@@ -219,7 +227,15 @@ Compiler::~Compiler()
+     {
+         bool succeded = R_SUCCEEDED(svcUnmapProcessMemory(JitRWStart, envGetOwnProcessHandle(), (u64)JitRXStart, JitMemSize));
+         assert(succeded);
+-        virtmemFree(JitRWStart, JitMemSize);
++        /* virtmemFree was a documented no-op; a reservation is not, and
++           leaks the address space if it is never removed. */
++        if (JitRWReservation)
++        {
++            virtmemLock();
++            virtmemRemoveReservation((VirtmemReservation*)JitRWReservation);
++            virtmemUnlock();
++            JitRWReservation = NULL;
++        }
+         succeded = R_SUCCEEDED(svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)JitRXStart, (u64)JitRWBase, JitMemSize));
+         assert(succeded);
+         free(JitRWBase);
+@@ -232,12 +248,12 @@ void Compiler::LoadReg(int reg, ARM64Reg nativeReg)
+     if (reg == 15)
+         MOVI2R(nativeReg, R15);
+     else
+-        LDR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R[reg]));
++        LDR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R) + sizeof(u32) * reg);
+ }
+ 
+ void Compiler::SaveReg(int reg, ARM64Reg nativeReg)
+ {
+-    STR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R[reg]));
++    STR(INDEX_UNSIGNED, nativeReg, RCPU, offsetof(ARM, R) + sizeof(u32) * reg);
+ }
+ 
+ void Compiler::LoadCPSR()
+diff --git a/src/ARMJIT_A64/ARMJIT_Compiler.h b/src/ARMJIT_A64/ARMJIT_Compiler.h
+index 7e13507..afc0964 100644
+--- a/src/ARMJIT_A64/ARMJIT_Compiler.h
++++ b/src/ARMJIT_A64/ARMJIT_Compiler.h
+@@ -225,6 +225,19 @@ public:
+ #ifdef __SWITCH__
+     void* JitRWBase;
+     void* JitRWStart;
++#ifdef __SWITCH__
++    /* The VirtmemReservation returned by virtmemAddReservation, held so the
++       destructor can release it: libnx 4.0's replacement for virtmemReserve
++       is not the no-op that virtmemFree was.
++
++       Deliberately void* rather than the real type. This class lives in
++       namespace ARMJIT, so a forward declaration here would declare
++       ARMJIT::VirtmemReservation and not libnx's global one, and including
++       <switch.h> to name it would drag the whole header into every
++       translation unit that includes this file. The cast lives at the two
++       use sites in the .cpp, which includes <switch.h> already. */
++    void* JitRWReservation;
++#endif
+     void* JitRXStart;
+ #endif
+ };
+diff --git a/src/GPU2D_Neon.cpp b/src/GPU2D_Neon.cpp
+index 813f34c..4770eb6 100644
+--- a/src/GPU2D_Neon.cpp
++++ b/src/GPU2D_Neon.cpp
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ #include "GPU2D.h"
+ 
+ #include "NDS.h"
+diff --git a/src/GPU3D_Soft.cpp b/src/GPU3D_Soft.cpp
+index 193d198..41c2dc4 100644
+--- a/src/GPU3D_Soft.cpp
++++ b/src/GPU3D_Soft.cpp
+@@ -16,6 +16,7 @@
+     with melonDS. If not, see http://www.gnu.org/licenses/.
+ */
+ 
++#include <algorithm>
+ #include <stdio.h>
+ #include <string.h>
+ #include "NDS.h"
+diff --git a/src/NDS.cpp b/src/NDS.cpp
+index 9344b17..adc57c5 100644
+--- a/src/NDS.cpp
++++ b/src/NDS.cpp
+@@ -16,6 +16,7 @@
+     with melonDS. If not, see http://www.gnu.org/licenses/.
+ */
+ 
++#include <algorithm>
+ #include <stdio.h>
+ #include <string.h>
+ #include "Config.h"
+diff --git a/src/dolphin/Arm64Emitter.cpp b/src/dolphin/Arm64Emitter.cpp
+index dd2416b..fe13848 100644
+--- a/src/dolphin/Arm64Emitter.cpp
++++ b/src/dolphin/Arm64Emitter.cpp
+@@ -2,6 +2,7 @@
+ // Licensed under GPLv2+
+ // Refer to the license.txt file included.
+ 
++#include <limits>
+ #include <algorithm>
+ #include <array>
+ #include <cinttypes>
+diff --git a/src/libretro/libretro-common/rthreads/rsemaphore.c b/src/libretro/libretro-common/rthreads/rsemaphore.c
+index 7d32524..523d001 100644
+--- a/src/libretro/libretro-common/rthreads/rsemaphore.c
++++ b/src/libretro/libretro-common/rthreads/rsemaphore.c
+@@ -101,7 +101,7 @@ void ssem_wait(ssem_t *semaphore)
+ bool ssem_trywait(ssem_t *semaphore)
+ {
+    if (!semaphore)
+-      return;
++      return false;
+ 
+    slock_lock(semaphore->mutex);
+ 
+diff --git a/src/libretro/libretro.cpp b/src/libretro/libretro.cpp
+index 5468d5b..3892f10 100644
+--- a/src/libretro/libretro.cpp
++++ b/src/libretro/libretro.cpp
+@@ -1,3 +1,4 @@
++#include <ctime>
+ #include <string>
+ #include <vector>
+ 
+diff --git a/src/switch/profiler.cpp b/src/switch/profiler.cpp
+index 6e7f25e..adb0e66 100644
+--- a/src/switch/profiler.cpp
++++ b/src/switch/profiler.cpp
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ #include "profiler.h"
+ 
+ #include <vector>

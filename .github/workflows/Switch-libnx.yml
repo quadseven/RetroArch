@@ -16,11 +16,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: reallibretroretroarch/libretro-build-libnx-devkitpro:v4-10-0
+      # Upstream pins a frozen toolchain image. Anything built with it warns
+      # "This application does not support the current ABI" on a modern
+      # Atmosphere, which is what #18412 describes. Build against a current
+      # devkitPro instead and see whether the warning and the Core Downloader
+      # crash both go away.
+      image: devkitpro/devkita64:latest
       options: --user root
 
     steps:
     - uses: actions/checkout@v3
+
+    - name: Install the port libraries the pinned image had preinstalled
+      run: |
+        for attempt in 1 2 3; do
+          dkp-pacman --noconfirm -Sy switch-dev switch-portlibs && break
+          echo "attempt $attempt failed"; sleep $((attempt * 20))
+        done
 
     - name: Compile RA
       run: |

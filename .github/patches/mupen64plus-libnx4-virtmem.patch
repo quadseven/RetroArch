@@ -1,0 +1,100 @@
+Restore the aarch64 dynarec on libnx 4.x.
+
+libnx 4.0 removed virtmemReserve(), so switch/mman.h stopped compiling:
+
+    mman.h:32:16: error: assignment to 'void *' from 'int' makes pointer
+    from integer without a cast [-Wint-conversion]
+       32 |         ptr_rw = virtmemReserve(size);
+
+Still present on both master and develop as of this writing, so the fix
+has to be applied here rather than waited for.
+
+The replacement has to come out of the same region. libnx 3.x allocated
+virtmemReserve() from g_AddressSpace, filled from
+InfoType_AslrRegionAddress, and added a 0x1000 guard page before each
+attempt. virtmemFindAslr(size, 0x1000) is that same request.
+
+Note this is NOT the pattern in libnx's own jit.c. That calls
+virtmemFindCodeMemory() because it feeds svcMapProcessCodeMemory. This
+file feeds svcMapProcessMemory, which wants general purpose address
+space. Copying jit.c would compile and then fail at the map call.
+
+virtmemAddReservation() is what marks the range taken, and unlike the
+old virtmemFree() no-op it has to be removed or the address space leaks.
+ptr_rw is left alone in munmap on purpose: new_dynarec.c unmaps more
+than one region through this single global, so clearing it would change
+which address a following munmap acts on.
+
+diff --git a/switch/mman.h b/switch/mman.h
+index 6a5166e..6d9f974 100644
+--- a/switch/mman.h
++++ b/switch/mman.h
+@@ -22,6 +22,7 @@ extern "C"
+ 
+ #define MAP_FAILED ((void *)-1)
+ void* ptr_rw = NULL;
++VirtmemReservation* rv_rw = NULL;
+ 
+ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
+ {
+@@ -29,7 +30,26 @@ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, of
+     (void)offset;
+ 
+     size_t size = (len + 0xFFF) &~ 0xFFF;
+-	ptr_rw = virtmemReserve(size);
++
++    /* libnx 4.0 removed virtmemReserve. That call took its address from
++     * the ASLR region and stepped one 0x1000 guard page forward on each
++     * attempt, which is what virtmemFindAslr(size, 0x1000) asks for.
++     * Deliberately not virtmemFindCodeMemory, which libnx's own jit.c
++     * uses: that one feeds svcMapProcessCodeMemory, while this maps
++     * ordinary process memory and needs general purpose address space.
++     * Picking the code region would build fine and fail on the map. */
++    virtmemLock();
++    ptr_rw = virtmemFindAslr(size, 0x1000);
++    rv_rw  = ptr_rw ? virtmemAddReservation(ptr_rw, size) : NULL;
++    virtmemUnlock();
++
++    if (rv_rw == NULL)
++    {
++        printf("[NXJIT]: address space reservation failed!\n");
++        ptr_rw = NULL;
++        return MAP_FAILED;
++    }
++
+     if (R_SUCCEEDED(svcMapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)addr, size)))
+     {
+         return ptr_rw;
+@@ -37,7 +57,12 @@ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, of
+     else
+     {
+         printf("[NXJIT]: Jit failed!\n");
+-        return (void*)-1;
++        virtmemLock();
++        virtmemRemoveReservation(rv_rw);
++        virtmemUnlock();
++        rv_rw  = NULL;
++        ptr_rw = NULL;
++        return MAP_FAILED;
+     }
+ }
+ 
+@@ -50,6 +75,18 @@ static inline int munmap(void *addr, size_t len)
+ {
+     size_t size = (len + 0xFFF) &~ 0xFFF;
+     svcUnmapProcessMemory(ptr_rw, envGetOwnProcessHandle(), (u64)addr, size);
++
++    /* virtmemFree was documented as a no-op, so the old code had nothing to
++     * release here. A reservation is real and leaks the address space if it
++     * is never removed. ptr_rw is deliberately left as it was. */
++    if (rv_rw != NULL)
++    {
++        virtmemLock();
++        virtmemRemoveReservation(rv_rw);
++        virtmemUnlock();
++        rv_rw = NULL;
++    }
++
+     printf("[NXJIT]: Jit closed\n");
+     
+     return 0;

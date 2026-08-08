@@ -2,6 +2,7 @@
  *  See otlp_log_exporter.h for what this is and how it is configured.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,7 +14,62 @@
 #include <string/stdstring.h>
 
 #include "otlp_log_exporter.h"
+
+/* Defined below; used by init before its definition. */
+static void otlp_write_status(const char *fmt, ...);
 #include "file_path_special.h"
+
+#ifdef __SWITCH__
+#include <switch.h>
+
+/*
+ * Wall clock on this console is whole seconds. time() is all that newlib
+ * offers, so every record written inside the same second used to carry an
+ * identical timestamp and could not be put in order at all. For a crash where
+ * the interesting events are 3ms apart that is the difference between a
+ * usable log and a pile of lines.
+ *
+ * armGetSystemTick is a monotonic counter with a known frequency. Anchor it
+ * to time() once at startup and interpolate from there: the wall clock stays
+ * correct to the second and everything within that second is ordered properly.
+ * The anchor is only ever read, never re-taken, so records cannot go backwards
+ * if the RTC is adjusted underneath us.
+ */
+static int64_t otlp_epoch_ns_at_anchor;
+static uint64_t otlp_tick_at_anchor;
+
+static void otlp_clock_anchor(void)
+{
+   otlp_epoch_ns_at_anchor = (int64_t)time(NULL) * 1000000000LL;
+   otlp_tick_at_anchor     = armGetSystemTick();
+}
+
+static int64_t otlp_now_ns(void)
+{
+   if (!otlp_tick_at_anchor)
+      return (int64_t)time(NULL) * 1000000000LL;
+   return otlp_epoch_ns_at_anchor +
+          (int64_t)armTicksToNs(armGetSystemTick() - otlp_tick_at_anchor);
+}
+
+/* Which thread emitted a line. Without this, two events milliseconds apart
+ * are indistinguishable from one thread doing two things and two threads
+ * racing, and that distinction is usually the entire question. */
+static uint64_t otlp_thread_id(void)
+{
+   u64 tid = 0;
+   if (R_FAILED(svcGetThreadId(&tid, threadGetCurHandle())))
+      return 0;
+   return tid;
+}
+#else
+static void otlp_clock_anchor(void) { }
+static int64_t otlp_now_ns(void)
+{
+   return (int64_t)time(NULL) * 1000000000LL;
+}
+static uint64_t otlp_thread_id(void) { return 0; }
+#endif
 
 /* Bounded so a runaway log cannot grow memory without limit. Dropping the
  * oldest is the right trade: the newest records describe what is happening
@@ -28,13 +84,24 @@ typedef struct
    int64_t  time_unix_nano;
    int      severity_number;
    char     severity_text[8];
+   /* Empty for a line from RARCH_LOG and friends, which is the common case.
+    * "stdout" or "stderr" for a raw write picked up by the capture in
+    * platform_switch.c, emitted as a log.source attribute. Worth telling
+    * apart: a RetroArch log line carries a real level, a raw write does
+    * not, and a core that printf()s is a different thing from one using
+    * the libretro log callback. */
+   char     source[8];
+   /* 0 when unavailable. Emitted as thread.id so a query can separate one
+    * thread doing two things from two threads racing. */
+   uint64_t thread_id;
    char     body[OTLP_MAX_LINE];
 } otlp_record_t;
 
 typedef struct
 {
    bool            running;
-   volatile bool   stopping;
+   bool            stopping;     /* guarded by lock */
+   bool            suspended;    /* guarded by lock */
 
    char            url[512];
    /* May carry a credential. Never logged, never returned. */
@@ -54,6 +121,7 @@ typedef struct
    unsigned        stat_dropped;
    unsigned        stat_failures;
    char            last_error[160];
+   char            config_dir[256];
 } otlp_state_t;
 
 static otlp_state_t otlp_st;
@@ -250,7 +318,39 @@ static char *otlp_build_payload(const otlp_record_t *batch, unsigned n)
       otlp_append(out, cap, batch[i].severity_text);
       otlp_append(out, cap, "\",\"body\":{\"stringValue\":\"");
       otlp_append_escaped(out, cap, batch[i].body);
-      otlp_append(out, cap, "\"}}");
+      otlp_append(out, cap, "\"}");
+      /* Attributes, when there is anything worth saying. log.source only
+       * appears on raw writes; thread.id whenever the kernel gave us one.
+       * Emitting empties on every line would cost payload size on the
+       * hottest path for nothing. */
+      if (batch[i].source[0] || batch[i].thread_id)
+      {
+         int wrote = 0;
+         otlp_append(out, cap, ",\"attributes\":[");
+         if (batch[i].source[0])
+         {
+            otlp_append(out, cap,
+                  "{\"key\":\"log.source\",\"value\":{\"stringValue\":\"");
+            otlp_append_escaped(out, cap, batch[i].source);
+            otlp_append(out, cap, "\"}}");
+            wrote = 1;
+         }
+         if (batch[i].thread_id)
+         {
+            if (wrote)
+               otlp_append(out, cap, ",");
+            /* String, not a JSON number: this is a u64 and JSON cannot
+             * carry that range without losing the low bits. */
+            otlp_append(out, cap,
+                  "{\"key\":\"thread.id\",\"value\":{\"stringValue\":\"");
+            snprintf(num, sizeof(num), "%llu",
+                  (unsigned long long)batch[i].thread_id);
+            otlp_append(out, cap, num);
+            otlp_append(out, cap, "\"}}");
+         }
+         otlp_append(out, cap, "]");
+      }
+      otlp_append(out, cap, "}");
    }
 
    otlp_append(out, cap, "]}]}]}");
@@ -266,8 +366,10 @@ static bool otlp_post(const char *body)
 
    if (!(conn = net_http_connection_new(otlp_st.url, "POST", body)))
    {
+      slock_lock(otlp_st.lock);
       strlcpy(otlp_st.last_error, "could not create connection",
             sizeof(otlp_st.last_error));
+      slock_unlock(otlp_st.lock);
       return false;
    }
 
@@ -281,15 +383,21 @@ static bool otlp_post(const char *body)
 
    if (!(http = net_http_new(conn)))
    {
+      slock_lock(otlp_st.lock);
       strlcpy(otlp_st.last_error, "connection failed (dns, tls or refused)",
             sizeof(otlp_st.last_error));
+      slock_unlock(otlp_st.lock);
       net_http_connection_free(conn);
       return false;
    }
 
    while (!net_http_update(http, NULL, NULL))
    {
-      if (otlp_st.stopping)
+      bool stop;
+      slock_lock(otlp_st.lock);
+      stop = otlp_st.stopping;
+      slock_unlock(otlp_st.lock);
+      if (stop)
          break;
       retro_sleep(10);
    }
@@ -298,8 +406,12 @@ static bool otlp_post(const char *body)
    ok     = (status >= 200 && status < 300);
 
    if (!ok)
+   {
+      slock_lock(otlp_st.lock);
       snprintf(otlp_st.last_error, sizeof(otlp_st.last_error),
             "endpoint returned HTTP %d", status);
+      slock_unlock(otlp_st.lock);
+   }
 
    net_http_delete(http);
    net_http_connection_free(conn);
@@ -310,9 +422,27 @@ static bool otlp_post(const char *body)
 
 static void otlp_worker(void *unused)
 {
-   otlp_record_t batch[OTLP_MAX_BATCH];
+   /* Heap, not stack. OTLP_MAX_BATCH records is around 134KB, which is far
+    * more than a thread stack on this platform: an earlier version declared
+    * this as a local array and faulted in the function prologue the instant
+    * the thread was created. */
+   otlp_record_t *batch = (otlp_record_t*)malloc(
+         sizeof(otlp_record_t) * OTLP_MAX_BATCH);
 
    (void)unused;
+
+   if (!batch)
+   {
+      /* Without this the exporter stays "running" with no consumer: producers
+       * keep accepting records into a queue nobody drains, and the exit
+       * report shows sent=0 with zero failures, which reads as a transport
+       * mystery instead of an allocation failure. Stop loudly. */
+      slock_lock(otlp_st.lock);
+      otlp_st.running = false;
+      slock_unlock(otlp_st.lock);
+      otlp_write_status("stopped: worker could not allocate the batch buffer");
+      return;
+   }
 
    for (;;)
    {
@@ -320,8 +450,16 @@ static void otlp_worker(void *unused)
 
       slock_lock(otlp_st.lock);
 
-      if (!otlp_st.stopping && otlp_st.count == 0)
+      if ((!otlp_st.stopping && otlp_st.count == 0) || otlp_st.suspended)
          scond_wait_timeout(otlp_st.cond, otlp_st.lock, OTLP_FLUSH_US);
+
+      /* Park while the console is suspended rather than taking a batch we
+       * would then try to post over a network the OS is dismantling. */
+      if (otlp_st.suspended && !otlp_st.stopping)
+      {
+         slock_unlock(otlp_st.lock);
+         continue;
+      }
 
       while (n < OTLP_MAX_BATCH && otlp_st.count > 0)
       {
@@ -334,6 +472,7 @@ static void otlp_worker(void *unused)
       if (n == 0 && otlp_st.stopping)
       {
          slock_unlock(otlp_st.lock);
+         free(batch);
          return;
       }
 
@@ -341,7 +480,31 @@ static void otlp_worker(void *unused)
 
       if (n > 0)
       {
-         char *payload = otlp_build_payload(batch, n);
+         char *payload;
+         bool  parked;
+
+         slock_lock(otlp_st.lock);
+         parked = otlp_st.suspended && !otlp_st.stopping;
+         if (parked)
+         {
+            /* Focus was lost after the batch was taken. Put it back rather
+             * than posting into a network that is going away; the records are
+             * still wanted, just not now. */
+            unsigned i;
+            for (i = 0; i < n && otlp_st.count < OTLP_MAX_RECORDS; i++)
+            {
+               unsigned tail = (otlp_st.head + OTLP_MAX_RECORDS
+                     - otlp_st.count - 1) % OTLP_MAX_RECORDS;
+               otlp_st.records[tail] = batch[n - 1 - i];
+               otlp_st.count++;
+            }
+         }
+         slock_unlock(otlp_st.lock);
+
+         if (parked)
+            continue;
+
+         payload = otlp_build_payload(batch, n);
          bool ok       = payload && otlp_post(payload);
 
          free(payload);
@@ -366,6 +529,9 @@ static void otlp_worker(void *unused)
 
 bool otlp_log_exporter_init(const char *config_dir)
 {
+   /* Before anything can be timestamped. */
+   otlp_clock_anchor();
+
    char endpoint[512];
    size_t len;
 
@@ -374,9 +540,18 @@ bool otlp_log_exporter_init(const char *config_dir)
 
    memset(&otlp_st, 0, sizeof(otlp_st));
 
+   /* Recorded before anything can fail, because otlp_write_status builds its
+    * path from it. Set later and every early return below is silent, which
+    * makes the most likely failure the one that reports nothing at all. */
+   strlcpy(otlp_st.config_dir, config_dir, sizeof(otlp_st.config_dir));
+
    otlp_read_first_line(config_dir, "otel-endpoint", endpoint, sizeof(endpoint));
    if (string_is_empty(endpoint))
+   {
+      otlp_write_status("stopped: no endpoint. Expected a url on the first"
+            " line of %s/otel-endpoint", config_dir);
       return false;
+   }
 
    /* OTEL_EXPORTER_OTLP_ENDPOINT is a base that the signal path is appended
     * to. Accept a full logs url too, so either form works. */
@@ -402,7 +577,16 @@ bool otlp_log_exporter_init(const char *config_dir)
       char *p;
 
       otlp_read_first_line(config_dir, "otel-headers", raw, sizeof(raw));
-      strlcpy(otlp_st.headers, "Content-Type: application/json",
+
+      /* Every line here, including the last, has to end in CRLF. net_http
+       * sends this block verbatim and then appends Content-Length itself, so
+       * a missing terminator does not merely drop a header: the last one runs
+       * into "Content-Length: N" and eats it. The server then has a bad
+       * credential and no way to size the body, waits for it, and closes.
+       * That reads back as a failed receive rather than an HTTP error, which
+       * is why it looked like a transport fault. task_http.c sets the same
+       * precedent with "Expect: 100-continue\r\n". */
+      strlcpy(otlp_st.headers, "Content-Type: application/json\r\n",
             sizeof(otlp_st.headers));
 
       p = raw;
@@ -415,10 +599,10 @@ bool otlp_log_exporter_init(const char *config_dir)
          if ((eq = strchr(p, '=')))
          {
             *eq = '\0';
-            otlp_append(otlp_st.headers, sizeof(otlp_st.headers), "\r\n");
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), p);
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), ": ");
             otlp_append(otlp_st.headers, sizeof(otlp_st.headers), eq + 1);
+            otlp_append(otlp_st.headers, sizeof(otlp_st.headers), "\r\n");
          }
          if (!comma)
             break;
@@ -428,18 +612,30 @@ bool otlp_log_exporter_init(const char *config_dir)
 
    if (!(otlp_st.records = (otlp_record_t*)calloc(OTLP_MAX_RECORDS,
                sizeof(otlp_record_t))))
+   {
+      otlp_write_status("stopped: out of memory for %u records",
+            (unsigned)OTLP_MAX_RECORDS);
       return false;
+   }
 
    if (!(otlp_st.lock = slock_new()))
+   {
+      otlp_write_status("stopped: slock_new failed");
       goto error;
+   }
    if (!(otlp_st.cond = scond_new()))
+   {
+      otlp_write_status("stopped: scond_new failed");
       goto error;
+   }
 
    otlp_st.running = true;
+   otlp_write_status("started, endpoint=%s", otlp_st.url);
 
    if (!(otlp_st.thread = sthread_create(otlp_worker, NULL)))
    {
       otlp_st.running = false;
+      otlp_write_status("stopped: could not start the sender thread");
       goto error;
    }
 
@@ -455,22 +651,51 @@ error:
    return false;
 }
 
+
+/**
+ * Writes a one line status file next to the config.
+ *
+ * Deliberately plain fopen rather than RARCH_LOG. On some ports the log file
+ * is never opened, so anything reported through the logger is invisible, and
+ * a diagnostic that depends on the subsystem it is diagnosing is worth
+ * nothing. This is the only place the exporter reports on itself.
+ */
+static void otlp_write_status(const char *fmt, ...)
+{
+   char path[512];
+   FILE *fp;
+   va_list ap;
+
+   snprintf(path, sizeof(path), "%s/otel-status.txt", otlp_st.config_dir);
+   if (!(fp = fopen(path, "w")))
+      return;
+
+   va_start(ap, fmt);
+   vfprintf(fp, fmt, ap);
+   va_end(ap);
+   fputc('\n', fp);
+   fclose(fp);
+}
+
 bool otlp_log_exporter_enabled(void)
 {
    return otlp_st.running;
 }
 
-void otlp_log_exporter_log(const char *tag, const char *line)
+static void otlp_enqueue(int severity, const char *source, const char *line)
 {
    otlp_record_t *rec;
-   int severity;
-
-   if (!otlp_st.running || !line || !*line)
-      return;
-
-   severity = otlp_severity_number(tag);
 
    slock_lock(otlp_st.lock);
+
+   /* Checked under the lock: the worker clears running from its own thread
+    * when it stops itself, and enqueueing past that point writes into a
+    * queue nobody will ever drain. */
+   if (!otlp_st.running)
+   {
+      slock_unlock(otlp_st.lock);
+      return;
+   }
 
    rec = &otlp_st.records[otlp_st.head];
    otlp_st.head = (otlp_st.head + 1) % OTLP_MAX_RECORDS;
@@ -481,12 +706,12 @@ void otlp_log_exporter_log(const char *tag, const char *line)
       otlp_st.count++;
 
    {
-      /* time() is second resolution, which is all that is portable here.
-       * OTLP wants nanoseconds. */
-      rec->time_unix_nano  = (int64_t)time(NULL) * 1000000000LL;
+      rec->time_unix_nano  = otlp_now_ns();
+      rec->thread_id       = otlp_thread_id();
       rec->severity_number = severity;
       strlcpy(rec->severity_text, otlp_severity_text(severity),
             sizeof(rec->severity_text));
+      strlcpy(rec->source, source ? source : "", sizeof(rec->source));
       strlcpy(rec->body, line, sizeof(rec->body));
    }
 
@@ -496,9 +721,49 @@ void otlp_log_exporter_log(const char *tag, const char *line)
    scond_signal(otlp_st.cond);
 }
 
+void otlp_log_exporter_log(const char *tag, const char *line)
+{
+   if (!line || !*line)
+      return;
+   otlp_enqueue(otlp_severity_number(tag), NULL, line);
+}
+
+void otlp_log_exporter_log_raw(const char *line, bool is_stderr)
+{
+   if (!line || !*line)
+      return;
+   /* A raw write carries no level. stderr is reported one step above stdout
+    * because callers overwhelmingly use it for failures, but neither is a
+    * real severity and log.source is what actually says where it came from.
+    * 9 is INFO and 13 is WARN in the OTLP severity numbering. */
+   otlp_enqueue(is_stderr ? 13 : 9, is_stderr ? "stderr" : "stdout", line);
+}
+
+void otlp_log_exporter_set_suspended(bool suspended)
+{
+   bool changed;
+
+   if (!otlp_st.running)
+      return;
+
+   slock_lock(otlp_st.lock);
+   changed = (otlp_st.suspended != suspended);
+   otlp_st.suspended = suspended;
+   slock_unlock(otlp_st.lock);
+
+   /* Waking on resume matters: the worker may be part way through its flush
+    * wait, and records buffered during the sleep should not sit there for the
+    * remainder of it. */
+   if (changed && !suspended)
+      scond_signal(otlp_st.cond);
+}
+
 void otlp_log_exporter_deinit(void)
 {
-   if (!otlp_st.running)
+   /* Keyed on the thread, not on running: the worker sets running to false
+    * itself if its batch allocation fails, and bailing out on that basis
+    * would skip the join and leak the lock, the cond and the queue. */
+   if (!otlp_st.thread)
       return;
 
    slock_lock(otlp_st.lock);
@@ -508,6 +773,11 @@ void otlp_log_exporter_deinit(void)
 
    if (otlp_st.thread)
       sthread_join(otlp_st.thread);
+
+   otlp_write_status("accepted=%u sent=%u dropped=%u failures=%u last_error=%s",
+         otlp_st.stat_accepted, otlp_st.stat_sent, otlp_st.stat_dropped,
+         otlp_st.stat_failures,
+         otlp_st.last_error[0] ? otlp_st.last_error : "none");
 
    scond_free(otlp_st.cond);
    slock_free(otlp_st.lock);

@@ -1,0 +1,460 @@
+name: CI Switch core with OTLP
+
+# The Switch build produces two very different binaries from this same tree.
+#
+#   HAVE_STATIC_DUMMY=1  ->  retroarch_switch.nro, the salamander launcher
+#   (no flag)            ->  <core>_libretro_libnx.nro, RetroArch statically
+#                            linked against libretro_libnx.a
+#
+# Picking a game makes the launcher exec the second binary and exit, so a
+# launcher-only build reports its own startup and then goes quiet for the
+# entire time a game is actually running. Instrumenting gameplay means
+# building the core NRO from this fork rather than taking the prebuilt one
+# from the libretro buildbot, which has no exporter in it.
+#
+# The buildbot publishes only finished .nro files and no .a, so each core is
+# compiled from source here and handed to the RetroArch link step.
+#
+# Each core's repo and branch below is taken from libretro-super's own
+# recipes/nintendo/libnx, which is what the buildbot actually builds. Two of
+# them are not the obvious choice and were the reason this workflow failed for
+# a month:
+#
+#   mupen64plus_next  builds from develop, not the default branch
+#   ppsspp            builds from m4xw/ppsspp branch switch, NOT hrydgard's
+#                     upstream, whose libretro Makefile has no libnx platform
+#                     at all and answers "Nothing to be done for 'all'"
+#
+# When a core is broken against the current toolchain, the fix goes in
+# .github/patches/ and is applied after cloning. Any patch that stops applying
+# fails the build rather than being skipped.
+#
+# This runs on push rather than workflow_dispatch because GitHub only
+# registers dispatchable workflows from the default branch, and this work
+# lives on a feature branch.
+
+on:
+  push:
+    paths:
+      # Everything this workflow actually executes. A commit touching only the
+      # ffmpeg build script once produced no run at all: the push succeeded,
+      # nothing was queued, and it looked exactly like a job that had not
+      # started yet. If a step runs a file, that file belongs on this list.
+      - ".github/workflows/Switch-core-otel.yml"
+      - ".github/patches/**"
+      - ".github/scripts/**"
+      - "otlp_log_exporter.c"
+      - "otlp_log_exporter.h"
+      - "Makefile.libnx"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      # Pinned by digest, not :latest. This image already contains the whole
+      # toolchain (its own Dockerfile installs switch-dev and switch-portlibs),
+      # so nothing here needs to reach pkg.devkitpro.org at build time. That
+      # host sits behind Cloudflare and has returned 403 to everything,
+      # including plain curl from a laptop, which used to take the build down
+      # with it. Pulling from Docker Hub is the only external fetch left.
+      #
+      # Digest is devkitpro/devkita64:latest as of 2026-08-05. Moving it is a
+      # deliberate toolchain bump, not something that happens overnight.
+      image: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+      options: --user root
+
+    strategy:
+      # One core failing to compile says nothing about the others, and PPSSPP
+      # is much the largest of the three, so let each stand or fall alone.
+      fail-fast: false
+      matrix:
+        include:
+          # mgba deleted Makefile.libretro on 2026-08-03 and moved the libretro
+          # core to CMake. SWITCH is what its CMakeLists actually tests for in
+          # six places (IS_EMBEDDED, no sqlite/discord/libzip, PNG_ARM_NEON
+          # off); NSWITCH is checked in exactly one, for -ffast-math, so both
+          # are passed. LIBMGBA_ONLY matters: without it the build also
+          # descends into src/platform/switch and builds the standalone
+          # homebrew app, which is not what a libretro core needs.
+          - core: mgba
+            repo: https://github.com/libretro/mgba
+            branch: master
+            buildsys: cmake
+            makedir: "."
+            makefile: ""
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: >-
+              -DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=ON -DLIBRETRO_STATIC=ON
+              -DSWITCH=ON -DNSWITCH=ON
+            cmaketarget: mgba_libretro
+            ffmpeg: ""
+            patch: ""
+          - core: mupen64plus_next
+            repo: https://github.com/libretro/mupen64plus-libretro-nx
+            branch: develop
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: mupen64plus-libnx4-virtmem.patch
+          # m4xw's fork, not hrydgard/ppsspp: this is the one carrying the
+          # libnx platform block, and it is what the buildbot recipe names.
+          - core: ppsspp
+            repo: https://github.com/m4xw/ppsspp
+            branch: switch
+            buildsys: make
+            makedir: libretro
+            makefile: Makefile
+            submodules: "true"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: vendored
+            patch: ppsspp-libnx4-virtmem.patch
+          - core: flycast
+            repo: https://github.com/libretro/flycast
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: flycast-libnx4-virtmem.patch
+          - core: gambatte
+            repo: https://github.com/libretro/gambatte-libretro
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: genesis_plus_gx
+            repo: https://github.com/libretro/Genesis-Plus-GX
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile.libretro
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          # melonDS is deliberately absent.
+          #
+          # It builds (see .github/patches/melonds-gcc15.patch, which fixes
+          # four separate GCC 15 and libnx 4.x breakages) and then fails to
+          # link against this RetroArch:
+          #
+          #     undefined reference to `memstream_set_buffer'
+          #     undefined reference to `fill_pathname_base_noext'
+          #
+          # Not a missing file. melonDS excludes its bundled libretro-common
+          # under STATIC_LINKING on purpose, expecting the frontend to supply
+          # it, and RetroArch's libretro-common has since changed the API:
+          #
+          #     melonDS   memstream_set_buffer(buf, size); memstream_open(w)
+          #     RetroArch memstream_open(buf, size, w)
+          #
+          # The buffer moved from global state into the call. Supplying the
+          # two missing symbols as shims would link and then pass garbage
+          # arguments, which on this path means corrupted save states. A core
+          # that fails to build beats one that quietly eats saves.
+          #
+          # Making it work means porting melonDS's save state and ROM param
+          # code to the current memstream API, which is emulator surgery and
+          # cannot be validated without DS ROMs on hardware.
+          #
+          # The stock buildbot core on the card still plays DS games. It just
+          # reports no telemetry, like the other cores did before tonight.
+          - core: nestopia
+            repo: https://github.com/libretro/nestopia
+            branch: master
+            buildsys: make
+            makedir: "libretro"
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          # DYNAREC=0 per the buildbot recipe: the ARM dynarec is not used on this target.
+          - core: pcsx_rearmed
+            repo: https://github.com/libretro/pcsx_rearmed
+            branch: master
+            buildsys: make
+            makedir: "."
+            makefile: Makefile.libretro
+            submodules: "true"
+            extraflags: "DYNAREC=0"
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+          - core: snes9x
+            repo: https://github.com/libretro/snes9x
+            branch: master
+            buildsys: make
+            makedir: "libretro"
+            makefile: Makefile
+            submodules: "false"
+            extraflags: ""
+            cmakeargs: ""
+            cmaketarget: ""
+            ffmpeg: ""
+            patch: ""
+
+    steps:
+      - name: Checkout RetroArch (this fork, with the exporter)
+        uses: actions/checkout@v4
+        with:
+          path: retroarch
+
+      - name: Verify the toolchain the image already ships
+        # There used to be a "dkp-pacman -Sy switch-dev switch-portlibs" here
+        # with five retries. It was pure ceremony: the devkitpro/devkita64
+        # Dockerfile installs both of those groups itself, so every run was
+        # re-downloading packages it already had, and pacman said as much
+        # ("warning: switch-cmake is up to date -- reinstalling").
+        #
+        # The cost of that ceremony was a hard dependency on pkg.devkitpro.org,
+        # and when Cloudflare started answering 403 for everyone the builds
+        # died at the first step with nothing wrong in the tree.
+        #
+        # Checking what the image provides is strictly better: no network, and
+        # a missing piece is named here rather than surfacing as a confusing
+        # compile error a few minutes later.
+        run: |
+          fail=0
+          check() {
+            if [ -e "$2" ]; then
+              echo "  ok      $1"
+            else
+              echo "  MISSING $1  ($2)"; fail=1
+            fi
+          }
+          : "${DEVKITPRO:=/opt/devkitpro}"
+          PORTLIBS="$DEVKITPRO/portlibs/switch"
+          echo "toolchain:"
+          check "devkitA64 compiler" "$DEVKITPRO/devkitA64/bin/aarch64-none-elf-gcc"
+          check "libnx headers"      "$DEVKITPRO/libnx/include/switch.h"
+          check "libnx switch_rules" "$DEVKITPRO/libnx/switch_rules"
+          check "libnx.a"            "$DEVKITPRO/libnx/lib/libnx.a"
+          echo "portlibs RetroArch links against:"
+          check "zlib"               "$PORTLIBS/include/zlib.h"
+          check "libpng"             "$PORTLIBS/include/png.h"
+          check "mbedtls"            "$PORTLIBS/include/mbedtls/ssl.h"
+          check "ffmpeg avcodec"     "$PORTLIBS/include/libavcodec/avcodec.h"
+          check "mesa EGL"           "$PORTLIBS/include/EGL/egl.h"
+          check "drm_nouveau"        "$PORTLIBS/lib/libdrm_nouveau.a"
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "the pinned image no longer ships part of the toolchain."
+            echo "either the digest moved or devkitPro changed the image."
+            exit 1
+          fi
+          echo
+          # -Q queries the local database only and never touches the network,
+          # unlike the -Sy this step replaced. Worth printing: a core that
+          # stops compiling usually means one of these moved under it, and
+          # having the versions in the log turns "why did this break" into a
+          # diff. PPSSPP's failure is exactly this, ffmpeg 4 code against
+          # whatever switch-ffmpeg happens to be today.
+          echo "toolchain versions baked into the image:"
+          dkp-pacman -Q libnx switch-ffmpeg switch-mesa switch-zlib \
+            switch-libpng switch-mbedtls 2>/dev/null | sed 's/^/  /' \
+            || echo "  (could not query the local package database)"
+
+      - name: Clone the core
+        env:
+          REPO: ${{ matrix.repo }}
+          BRANCH: ${{ matrix.branch }}
+          SUBMODULES: ${{ matrix.submodules }}
+        # The branch is always named explicitly. Cloning the default branch
+        # silently builds something other than what the buildbot builds, which
+        # is how the N64 core ended up compiled from a branch nobody ships.
+        run: |
+          if [ "$SUBMODULES" = "true" ]; then
+            git clone --depth 1 --branch "$BRANCH" --recursive "$REPO" core
+          else
+            git clone --depth 1 --branch "$BRANCH" "$REPO" core
+          fi
+          echo "core checked out at $BRANCH $(git -C core rev-parse --short HEAD)"
+
+      - name: Patch the core for the current toolchain
+        env:
+          PATCH: ${{ matrix.patch }}
+        # A patch that no longer applies means upstream moved and the fix needs
+        # rewriting. Failing here is the point: silently building unpatched
+        # would either fail later with an unrelated-looking error or, worse,
+        # succeed and ship a core with a known defect in it.
+        run: |
+          if [ -z "$PATCH" ]; then
+            echo "no patch for this core"
+            exit 0
+          fi
+          P="$GITHUB_WORKSPACE/retroarch/.github/patches/$PATCH"
+          if [ ! -f "$P" ]; then
+            echo "patch $PATCH is named in the matrix but not present at $P"
+            exit 1
+          fi
+          git -C core apply --verbose "$P"
+          echo "applied $PATCH"
+
+      - name: Build the core's own FFmpeg for Switch
+        env:
+          FFMPEG: ${{ matrix.ffmpeg }}
+        # Only PPSSPP needs this. Its libretro Makefile is the one platform
+        # block that reads ffmpeg out of the portlibs prefix instead of the
+        # submodule the project pins, so it compiles 3.x-era code against
+        # whatever devkitPro ships today. See the script for the full story.
+        run: |
+          if [ "$FFMPEG" != "vendored" ]; then
+            echo "this core uses the ffmpeg already in the image"
+            exit 0
+          fi
+          SRC="$GITHUB_WORKSPACE/core/ffmpeg"
+          if [ ! -f "$SRC/configure" ]; then
+            echo "expected an ffmpeg source tree at $SRC."
+            echo "the submodule is probably not checked out; needs submodules: true"
+            exit 1
+          fi
+          bash "$GITHUB_WORKSPACE/retroarch/.github/scripts/build-ffmpeg-switch.sh" "$SRC"
+
+      - name: Build the core as a static library
+        working-directory: core
+        env:
+          BUILDSYS: ${{ matrix.buildsys }}
+          MAKEFILE: ${{ matrix.makefile }}
+          MAKEDIR: ${{ matrix.makedir }}
+          EXTRAFLAGS: ${{ matrix.extraflags }}
+          CMAKEARGS: ${{ matrix.cmakeargs }}
+          CMAKETARGET: ${{ matrix.cmaketarget }}
+        # PPSSPP's libretro Makefile includes Makefile.common relative to its
+        # own directory, so it has to be run from there rather than via
+        # -f libretro/Makefile from the repository root.
+        #
+        # mgba deleted Makefile.libretro in 8940477 (2026-08-03) and moved the
+        # libretro core to CMake, hence the two build systems here. The cmake
+        # path goes through devkitPro's aarch64-none-elf-cmake wrapper, which
+        # is nothing more than cmake with CMAKE_TOOLCHAIN_FILE preset to
+        # Switch.cmake; invoking cmake directly silently builds for the host.
+        run: |
+          J="$(getconf _NPROCESSORS_ONLN)"
+          if [ "$BUILDSYS" = "cmake" ]; then
+            CM="$DEVKITPRO/portlibs/switch/bin/aarch64-none-elf-cmake"
+            [ -x "$CM" ] || { echo "missing $CM (switch-cmake)"; exit 1; }
+            # shellcheck disable=SC2086
+            "$CM" -DCMAKE_BUILD_TYPE=Release $CMAKEARGS -S "$MAKEDIR" -B build
+            cmake --build build --target "$CMAKETARGET" -j"$J"
+          else
+            # shellcheck disable=SC2086
+            make -C "$MAKEDIR" -f "$MAKEFILE" platform=libnx $EXTRAFLAGS -j"$J"
+          fi
+          echo "--- static libraries produced ---"
+          find . -name "*.a" -size +100k | head
+
+      - name: Hand the core to the RetroArch link step
+        # Selected by ABI rather than by filename. Several of these repos
+        # vendor unrelated prebuilt archives (PPSSPP ships MoltenVK and ffmpeg
+        # for iOS), and a name or size heuristic happily picks one of those.
+        # The link then fails on every retro_* entry point, far from the cause.
+        # An archive that defines retro_api_version is a libretro core; nothing
+        # else is.
+        run: |
+          NM="$DEVKITPRO/devkitA64/bin/aarch64-none-elf-nm"
+          [ -x "$NM" ] || NM="nm"
+          echo "--- every archive built ---"
+          find core -name "*.a" -size +20k | sed "s/^/    /"
+          CORE_LIB=""
+          while IFS= read -r a; do
+            if "$NM" --defined-only "$a" 2>/dev/null | grep -qE " T retro_api_version"; then
+              CORE_LIB="$a"; break
+            fi
+          done <<EOF
+          $(find core -name "*.a" -size +20k)
+          EOF
+          if [ -z "$CORE_LIB" ]; then
+            echo "no archive exports retro_api_version, so no libretro core was built"
+            exit 1
+          fi
+          echo "selected $CORE_LIB"
+          cp "$CORE_LIB" retroarch/libretro_libnx.a
+
+      - name: Build the instrumented core NRO
+        working-directory: retroarch
+        # No HAVE_STATIC_DUMMY here: that is what makes the build link
+        # libretro_libnx.a and produce a core rather than the launcher.
+        #
+        # TARGET is deliberately left at its default. Makefile.common gates
+        # every Switch driver behind "ifeq ($(TARGET), retroarch_switch)", so
+        # overriding it to name the core silently drops platform_switch.o,
+        # switch_ctx.o, switch_joypad.o and the audio drivers, and the link
+        # then fails on undefined references to all of them. Build under the
+        # expected name and rename afterwards.
+        env:
+          CORE: ${{ matrix.core }}
+        run: |
+          make -f Makefile.libnx -j"$(getconf _NPROCESSORS_ONLN)"
+          mv retroarch_switch.nro "${CORE}_libretro_libnx.nro"
+          mv retroarch_switch.elf "${CORE}_libretro_libnx.elf"
+          ls -la ./*.nro ./*.elf
+
+      - name: Confirm the exporter is actually in the binary
+        working-directory: retroarch
+        # A core NRO that silently lacks the exporter looks identical to one
+        # that has it until it ships nothing, which is the failure this whole
+        # workflow exists to prevent.
+        env:
+          CORE: ${{ matrix.core }}
+        run: |
+          NRO="${CORE}_libretro_libnx.nro"
+          for s in "otel-status.txt" "otel-endpoint" "started, endpoint=%s"; do
+            if strings -a "$NRO" | grep -qF "$s"; then
+              echo "ok      $s"
+            else
+              echo "MISSING $s"; exit 1
+            fi
+          done
+          python3 - "$NRO" <<'PY'
+          import sys
+          blob = open(sys.argv[1], 'rb').read()
+          needle = b"Content-Type: application/json"
+          i = blob.find(needle)
+          if i < 0:
+              sys.exit("header string absent")
+          tail = blob[i + len(needle):i + len(needle) + 2]
+          if tail != b"\r\n":
+              sys.exit("header not CRLF terminated: %r" % tail)
+          print("ok      request headers are CRLF terminated")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.core }}-otel-nro
+          path: retroarch/${{ matrix.core }}_libretro_libnx.nro
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.core }}-otel-elf
+          path: retroarch/${{ matrix.core }}_libretro_libnx.elf
