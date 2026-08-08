@@ -203,6 +203,7 @@
 #include <libretro.h>
 #if defined(HAVE_MMAP)
 #include <memmap.h>
+#include <sys/mman.h>
 #endif
 #include <encodings/utf.h>
 #include <compat/fopen_utf8.h>
@@ -276,8 +277,6 @@ int64_t retro_vfs_file_seek_internal(
       libretro_vfs_implementation_file *stream,
       int64_t offset, int whence)
 {
-   int64_t val;
-
    if (!stream)
       return -1;
 
@@ -297,10 +296,10 @@ int64_t retro_vfs_file_seek_internal(
 #elif defined(HAVE_64BIT_OFFSETS)
       return fseeko(stream->fp, (off_t)offset, whence);
 #else
-      return fseek(stream->fp, (long)offset, whence);
+      return fseek(stream->fp, (long)offset, whence) != 0 ? -1 : 0;
 #endif
    }
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
    /* Need to check stream->mapped because this function is
     * called in filestream_open() */
    if (stream->mapped && (stream->hints &
@@ -337,14 +336,11 @@ int64_t retro_vfs_file_seek_internal(
             stream->mappos = stream->mapsize + offset;
             break;
       }
-      return stream->mappos;
+      return 0;
    }
 #endif
 
-   if ((val = lseek(stream->fd, (off_t)offset, whence)) < 0)
-      return -1;
-
-   return val;
+   return lseek(stream->fd, (off_t)offset, whence) == -1 ? -1 : 0;
 }
 
 /**
@@ -423,7 +419,7 @@ libretro_vfs_implementation_file *retro_vfs_file_open_impl(
    if (path)
       stream->orig_path = strdup(path);
 
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
    if (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS && mode == RETRO_VFS_FILE_ACCESS_READ)
       stream->hints |= RFILE_HINT_UNBUFFERED;
    else
@@ -580,11 +576,21 @@ libretro_vfs_implementation_file *retro_vfs_file_open_impl(
        * even that is too much the allocation simply fails and the C
        * library default is used, so a platform under real pressure
        * degrades rather than breaks.  A platform wanting a different
-       * size says so, as the two below do. */
+       * size says so, as the two below do.
+       *
+       * It is malloc rather than calloc because nothing ever reads
+       * these bytes before stdio writes them - the buffer is handed
+       * straight to setvbuf and otherwise only freed, and the WiiU
+       * path below has always used non-zeroing memalign.  Zeroing it
+       * was the single dearest part of opening a small file: 3000
+       * opens of 256-byte files measured 2.9-3.1 us each with the
+       * zeroing and 1.8 us without, so scan-shaped and thumbnail-
+       * shaped workloads - thousands of opens, few bytes each - spent
+       * more time clearing buffers than reading files. */
 #if defined(_3DS)
       if (stream->scheme != VFS_SCHEME_CDROM)
       {
-         stream->buf = (char*)calloc(1, 0x10000);
+         stream->buf = (char*)malloc(0x10000);
          if (stream->fp)
             setvbuf(stream->fp, stream->buf, _IOFBF, 0x10000);
       }
@@ -600,7 +606,7 @@ libretro_vfs_implementation_file *retro_vfs_file_open_impl(
       if (stream->scheme != VFS_SCHEME_CDROM)
       {
          const int bufsize = 64 * 1024;
-         if ((stream->buf = (char*)calloc(1, bufsize)))
+         if ((stream->buf = (char*)malloc(bufsize)))
          {
             if (stream->fp)
                setvbuf(stream->fp, stream->buf, _IOFBF, bufsize);
@@ -649,24 +655,54 @@ libretro_vfs_implementation_file *retro_vfs_file_open_impl(
       if (stream->fd == -1)
          goto error;
 
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
       if (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS)
       {
          stream->mappos  = 0;
          stream->mapped  = NULL;
-         stream->mapsize = retro_vfs_file_seek_internal(stream, 0, SEEK_END);
 
+         retro_vfs_file_seek_internal(stream, 0, SEEK_END);
+
+         stream->mapsize = retro_vfs_file_tell_impl(stream);
          if (stream->mapsize == (uint64_t)-1)
             goto error;
 
          retro_vfs_file_seek_internal(stream, 0, SEEK_SET);
 
+#if defined(HAVE_MMAP)
          if ((stream->mapped = (uint8_t*)mmap((void*)0,
                stream->mapsize, PROT_READ,  MAP_SHARED, stream->fd, 0)) == MAP_FAILED)
          {
             stream->mapped = NULL;
             stream->hints &= ~RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS;
          }
+#else
+         {
+            /* Win32 file mapping.  A zero-length file cannot be mapped
+             * (CreateFileMapping rejects it), and a failed mapping of
+             * any kind - including a >4GB file on a 32-bit process,
+             * where MapViewOfFile cannot find address space - degrades
+             * to the ordinary descriptor path by dropping the hint,
+             * exactly as the POSIX branch does. */
+            HANDLE fh = (HANDLE)_get_osfhandle(stream->fd);
+            stream->map_handle = NULL;
+            if (fh != INVALID_HANDLE_VALUE && stream->mapsize > 0)
+               stream->map_handle = CreateFileMapping(fh, NULL,
+                     PAGE_READONLY, 0, 0, NULL);
+            if (stream->map_handle)
+            {
+               stream->mapped = (uint8_t*)MapViewOfFile(stream->map_handle,
+                     FILE_MAP_READ, 0, 0, 0);
+               if (!stream->mapped)
+               {
+                  CloseHandle(stream->map_handle);
+                  stream->map_handle = NULL;
+               }
+            }
+            if (!stream->mapped)
+               stream->hints &= ~RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS;
+         }
+#endif
       }
 #endif
    }
@@ -723,9 +759,20 @@ int retro_vfs_file_close_impl(libretro_vfs_implementation_file *stream)
    }
    else
    {
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
       if (stream->mapped && (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS))
+      {
+#if defined(HAVE_MMAP)
          munmap(stream->mapped, stream->mapsize);
+#else
+         UnmapViewOfFile(stream->mapped);
+         if (stream->map_handle)
+         {
+            CloseHandle(stream->map_handle);
+            stream->map_handle = NULL;
+         }
+#endif
+      }
 #endif
    }
 
@@ -819,8 +866,6 @@ int64_t retro_vfs_file_truncate_impl(libretro_vfs_implementation_file *stream, i
 
 int64_t retro_vfs_file_tell_impl(libretro_vfs_implementation_file *stream)
 {
-   int64_t val;
-
    if (!stream)
       return -1;
 
@@ -843,17 +888,14 @@ int64_t retro_vfs_file_tell_impl(libretro_vfs_implementation_file *stream)
       return ftell(stream->fp);
 #endif
    }
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
    /* Need to check stream->mapped because this function
     * is called in filestream_open() */
    if (stream->mapped && (stream->hints &
          RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS))
       return stream->mappos;
 #endif
-   if ((val = lseek(stream->fd, 0, SEEK_CUR)) < 0)
-      return -1;
-
-   return val;
+   return lseek(stream->fd, 0, SEEK_CUR);
 }
 
 int64_t retro_vfs_file_seek_impl(libretro_vfs_implementation_file *stream,
@@ -880,7 +922,7 @@ int64_t retro_vfs_file_read_impl(libretro_vfs_implementation_file *stream,
 #endif
       return fread(s, 1, (size_t)len, stream->fp);
    }
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
    if (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS)
    {
       if (stream->mappos >= stream->mapsize)
@@ -942,7 +984,7 @@ int64_t retro_vfs_file_write_impl(libretro_vfs_implementation_file *stream, cons
 
       return ret;
    }
-#ifdef HAVE_MMAP
+#ifdef VFS_HAVE_FILE_MAPPING
    if (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS)
       return -1;
 #endif
@@ -1111,6 +1153,30 @@ const char *retro_vfs_file_get_path_impl(
    if (!stream)
       return NULL;
    return stream->orig_path;
+}
+
+const uint8_t *retro_vfs_file_get_mapped_ptr_impl(
+      libretro_vfs_implementation_file *stream, int64_t *len)
+{
+   if (len)
+      *len = 0;
+#ifdef VFS_HAVE_FILE_MAPPING
+   /* Gate on the hint as well as the pointer, matching the read and
+    * seek paths: those consult 'mapped' only under the hint, so the
+    * map is authoritative for the file contents only when the hint
+    * put it there. */
+   if (     stream
+         && stream->mapped
+         && (stream->hints & RETRO_VFS_FILE_ACCESS_HINT_FREQUENT_ACCESS))
+   {
+      if (len)
+         *len = (int64_t)stream->mapsize;
+      return stream->mapped;
+   }
+#else
+   (void)stream;
+#endif
+   return NULL;
 }
 
 int retro_vfs_stat_64_impl(const char *path, int64_t *size)

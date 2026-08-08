@@ -14,6 +14,7 @@
 
 static const struct
 {
+   char s_74d0bdad[19];
    char s_9a250c33[35];
    char s_dec692c9[38];
    char s_9a250c34[35];
@@ -37,6 +38,8 @@ static const struct
    char s_76fae911[53];
    char s_56581215[54];
    char s_6b45243b[16];
+   char s_43585d45[32];
+   char s_43585d53[30];
    char s_ea6df2a1[111];
    char s_bfb33e98[88];
    char s_87603f77[16];
@@ -759,6 +762,9 @@ static const struct
    char s_700d45a9[24];
    char s_2a30a561[24];
    char s_6ae6f953[19];
+#ifdef ANDROID
+   char s_b573f90c[28];
+#endif
    char s_e28bc72f[26];
    char s_0b2a8528[41];
    char s_ea5757a0[7];
@@ -1123,6 +1129,7 @@ static const struct
    char s_d05c8ee3[18];
    char s_13bce77f[17];
    char s_1b2ee6c4[28];
+   char s_81589fd5[20];
    char s_26e9cde7[32];
    char s_b539ec6c[18];
    char s_f89e1cbc[39];
@@ -2186,6 +2193,7 @@ static const struct
    char s_a12ce1bf[10];
    char s_bfa23080[12];
    char s_ec326380[8];
+   char s_8a86d1de[20];
    char s_8fc1e4da[12];
    char s_14ed14d0[10];
    char s_5c87e95b[10];
@@ -2368,9 +2376,11 @@ static const struct
    char s_f4b6d13e[26];
    char s_25e89959[4];
    char s_a7468d68[25];
+   char s_b1d6fea6[9];
    char s_aa0659db[28];
    char s_49757b91[28];
    char s_660eb9c4[28];
+   char s_b6ca9df2[25];
 #if defined(RARCH_MOBILE)
    char s_b754294b[55];
    char s_b754294c[55];
@@ -2419,6 +2429,8 @@ static const struct
    char s_daf6d7e2[53];
    char s_042502c4[64];
    char s_90ae9a9f[92];
+   char s_81b79d5b_0[500];
+   char s_81b79d5b_1[99];
    char s_c9235dab[51];
    char s_330be970_0[500];
    char s_330be970_1[58];
@@ -2685,6 +2697,9 @@ static const struct
    char s_5c8a1d63[121];
    char s_744c0f80[70];
    char s_2aa39081[44];
+#ifdef ANDROID
+   char s_50f43cfa[269];
+#endif
    char s_e85b309d[90];
    char s_cd94bb16[217];
    char s_a17a67e1[53];
@@ -2934,6 +2949,7 @@ static const struct
    char s_87ac0bd1[81];
    char s_236ddb2d[109];
    char s_d27e63b2[250];
+   char s_2297ba83[258];
    char s_32728f95[97];
    char s_c4eae01a[143];
    char s_bb0852aa[174];
@@ -3479,6 +3495,7 @@ static const struct
    char s_698d5124[102];
    char s_7e43d750[183];
    char s_87ca7bc6[183];
+   char s_cfa51e8c[397];
    char s_b62c2f7e[318];
    char s_456fcbc9[326];
    char s_82fab47a[29];
@@ -4142,6 +4159,7 @@ static const struct
    char s_2dbb6496[39];
 } msg_hash_pl_blob =
 {
+   "Backend us\305\202ugi AI",
    "1-bit, maksymalna warto\305\233\304\207 = 0x01",
    "16-bit, maksymalna warto\305\233\304\207 = 0xFFFF",
    "2-bit, maksymalna warto\305\233\304\207 = 0x03",
@@ -4165,6 +4183,8 @@ static const struct
    "Uruchom nast\304\231pny cheat, je\305\233li Warto\305\233\304\207 < Pami\304\231\304\207",
    "Uruchom nast\304\231pny cheat, je\305\233li Warto\305\233\304\207 != Pami\304\231\304\207",
    "Ustaw warto\305\233\304\207",
+   "R\304\231czne wype\305\202nienie w poziomie",
+   "R\304\231czne wype\305\202nienie w pionie",
    "Serwer RetroAchievements jest niedost\304\231pny. B\304\231dziemy pr\303\263bowa\304\207 ponowni"
    "e do skutku lub zamkni\304\231cia aplikacji.",
    "Wszystkie oczekuj\304\205ce zapytania zosta\305\202y zsynchronizowane z serwerem RetroAchievemen"
@@ -5155,6 +5175,9 @@ static const struct
    "Prawy analog Y- (g\303\263ra)",
    "Prawy analog Y+ (d\303\263\305\202)",
    "Czu\305\202o\305\233\304\207 analoga",
+#ifdef ANDROID
+   "U\305\274yj klawiatury systemowej",
+#endif
    "Konfiguracja automatyczna",
    "Automatycznie w\305\202\304\205cz tryb \"Aktywna gra\"",
    "Wykryj",
@@ -5519,6 +5542,7 @@ static const struct
    "Zamie\305\204 miniatury",
    "Prze\305\202\304\205cz ikony",
    "Op\303\263\305\272nienie miniatury (ms)",
+   "Ditheruj miniaturki",
    "Metoda redukcji skali miniatury",
    "Przezroczysto\305\233\304\207",
    "Wzn\303\263w tre\305\233\304\207 po u\305\274yciu zapisu stanu",
@@ -6595,6 +6619,7 @@ static const struct
    "Dok\305\202adna",
    "Rozszerzony",
    "Szeroki",
+   "Szczytowa jasno\305\233\304\207",
    "Wy\305\202\304\205czony",
    "Jasno\305\233\304\207",
    "Skanlinie",
@@ -6780,9 +6805,11 @@ static const struct
    "Pozycja miniatur w pionie",
    "Tak",
    "Klucz strumienia YouTube",
+   "Tryb HDR",
    "Ustawienie wst\304\231pne shadera",
    "Ustawienie wst\304\231pne shadera",
    "Ustawienie wst\304\231pne shadera",
+   "G\305\202\304\231bia bitowa wyj\305\233cia",
 #if defined(RARCH_MOBILE)
    "Odchylenie zakotwiczenia widoku X (orientacja pionowa)",
    "Odchylenie zakotwiczenia widoku Y (orientacja pionowa)",
@@ -6860,6 +6887,15 @@ static const struct
    "Automatycznie wycisz d\305\272wi\304\231k podczas u\305\274ywania przyspieszenia.",
    "Przyspiesz d\305\272wi\304\231k podczas przewijania. Zapobiega trzeszczeniu d\305\272wi\304\231k"
    "u, ale zmienia ton.",
+   "U\305\274yj resamplera o sta\305\202ej liczbie (ca\305\202kowitej) zamiast zmiennoprzecinkowego "
+   "gdy rdze\305\204 wy\305\233le 16-bitowy d\305\272wi\304\231k. Tworzy dane wyj\305\233ciowe ident"
+   "yczne co do bita na ka\305\274dej platformie, dzi\304\231ki czemu d\305\272wi\304\231k odtwarzal"
+   "ny jest przy ka\305\274dym podej\305\233ciu i systemie. Dotyczy to odtwarzalno\305\233ci, a nie "
+   "pr\304\231dko\305\233ci: w przypadku gdy procesor posiada wektor FPU, resampler z liczbami ca"
+   "\305\202kowitymi jest wolniejszy, poniewa\305\274 tylko zmiennoprzecinkowy jest wektoryczny. Bra"
+   "k wp\305\202ywu na rdzenie z d\305\272wi\304\231kiem zmienn",
+   "oprzecinkowym wyj\305\233cia; wraca do zmiennoprzecinkowego, gdy aktywny jest niekompatybilny fi"
+   "ltr DSP.",
    "Filtry DSP audio s\304\205 przechowywane w tym katalogu.",
    "Format sampli o kt\303\263re sterownik audio prosi z urz\304\205dzenia wyj\305\233ciowego. 'Zmie"
    "nnoprzecinkowe' prosi o 32-bitow\304\205 liczb\304\231 zmiennoprzecinkow\304\205, 'Int16' 16-bit"
@@ -7269,6 +7305,12 @@ static const struct
    "\205czone, tylko u\305\274ytkownik 1 mo\305\274e kontrolowa\304\207 menu.",
    "Ignoruj ruchy dr\304\205\305\274ka analogowego poni\305\274ej warto\305\233ci strefy martwej.",
    "Dostosuj czu\305\202o\305\233\304\207 dr\304\205\305\274k\303\263w analogowych.",
+#ifdef ANDROID
+   "U\305\274ywaj klawiatury systemowej Androida do wpisywania tekstu w menu, zamiast klawiatury wbu"
+   "dowanej. Pozwala na wklejanie ze schowka i u\305\274ywanie menad\305\274er\303\263w hase\305\202"
+   ". Wymaga ekranu dotykowego lub innej metody wej\305\233ciowej, kt\303\263ra mo\305\274e by\304"
+   "\207 nawigowana za pomoc\304\205 gamepada.",
+#endif
    "Automatycznie konfiguruje kontrolery, kt\303\263re posiadaj\304\205 sw\303\263j profil, styl Plu"
    "g-and-Play.",
    "Zawsze w\305\202\304\205cz tryb \"Aktywno\305\233\304\207 gry\" podczas uruchamiania i wznawiani"
@@ -7696,6 +7738,10 @@ static const struct
    "\202adowaniem powi\304\205zanych miniatur. Ustawianie tej warto\305\233ci na poziomie co najmnie"
    "j 256 ms umo\305\274liwia szybkie przewijanie bez op\303\263\305\272nie\305\204 nawet na najwoln"
    "iejszych urz\304\205dzeniach.",
+   "Wyg\305\202ad\305\272 banding kolor\303\263w w miniaturkach i tapecie przez ich dithering do ogr"
+   "aniczonej palety kolor\303\263w menu. Wz\303\263r ditheringu jest powi\304\231kszany razem ze ws"
+   "zystkim innym w du\305\274ej skali menu, i mo\305\274e by\304\207 widoczny jako tekstura; je\305"
+   "\274eli tak jest wy\305\202\304\205cz to.",
    "Metoda Resamplingu u\305\274ywana podczas kurczenia du\305\274ych miniatur, aby dopasowa\304\207"
    " do wy\305\233wietlacza.",
    "W\305\202\304\205cz wy\305\233wietlanie w tle uruchomionych tre\305\233ci, gdy szybkie menu jest"
@@ -8587,6 +8633,12 @@ static const struct
    "U\305\274ywa pe\305\202nego zakresu kolor\303\263w twojego ekranu, aby stworzy\304\207 ja\305"
    "\233niejszy, bardziej nasycony obraz. Dla lepszego oddania kolor\303\263w bardziej pasuj\304\205"
    "cego do gry, ustaw to na Dok\305\202adny.",
+   "Masksymalna jasno\305\233\304\207 twojego ekranu w nitach. Ile miejsca jest nad Jasno\305\233ci"
+   "\304\205 na pod\305\233wietlanie, wi\304\231c rdzenie kt\303\263re same renderuj\304\205 HDR wie"
+   "dz\304\205 jak daleko mog\304\205 zaj\305\233\304\207 przed zjechaniem. Sprawd\305\272 specyfika"
+   "cj\304\231 twojego ekranu; w razie w\304\205tpliwo\305\233ci, pozostaw to ustawione na 1000. Ust"
+   "awienie tego wy\305\274ej ni\305\274 jasno\305\233\304\207 ekranu mo\305\274e spowodowa\304\207 "
+   "ucinanie jasnych szczeg\303\263\305\202\303\263w zamiast zjechania.",
    "Ustawia poziom jasno\305\233ci HDR w nitach. U\305\274ywaj razem z ustawieniami jasno\305\233ci "
    "twojego fizycznego ekranu. Na pocz\304\205tku, ustaw to na 80 a jasno\305\233\304\207 twojego ek"
    "ranu na maksymaln\304\205. Alternatywnie, ustaw to na maksymaln\304\205 ilo\305\233\304\207 nit"
@@ -9426,7 +9478,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_pl_blob_check[
-      (sizeof(msg_hash_pl_blob) == (186608u
+      (sizeof(msg_hash_pl_blob) == (188017u
 #ifdef ANDROID
        + 385u
 #endif
@@ -9478,6 +9530,9 @@ typedef char msg_hash_pl_blob_check[
        + 11u
        + 11u
        + 19u
+#endif
+#ifdef ANDROID
+       + 28u
 #endif
 #ifdef GEKKO
        + 12u
@@ -9675,6 +9730,9 @@ typedef char msg_hash_pl_blob_check[
        + 18u
        + 19u
 #endif
+#ifdef ANDROID
+       + 269u
+#endif
 #ifdef GEKKO
        + 67u
 #endif
@@ -9850,6 +9908,7 @@ typedef char msg_hash_pl_blob_check[
 
 static const uint32_t msg_hash_pl_ids[] =
 {
+   (uint32_t)MENU_ENUM_LABEL_AI_SERVICE_BACKEND,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_1,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_16,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_2,
@@ -9873,6 +9932,8 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_LT,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_NEQ,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_SET_TO_VALUE,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_H,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_V,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_DISCONNECTED,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_RECONNECTED,
    (uint32_t)MENU_ENUM_LABEL_EXPLORE_DELETE_VIEW,
@@ -10589,6 +10650,9 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_MINUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_PLUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS_DETECT,
@@ -10953,6 +11017,7 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_SWAP_THUMBNAILS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_SWITCH_ICONS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_THUMBNAIL_DELAY,
+   (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_THUMBNAIL_DITHER,
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_THUMBNAIL_DOWNSCALER,
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_RGUI_TRANSPARENCY,
    (uint32_t)MENU_ENUM_LABEL_VALUE_MENU_SAVESTATE_RESUME,
@@ -12015,6 +12080,7 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_EXPAND_GAMUT_ACCURATE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_EXPAND_GAMUT_EXPANDED,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_EXPAND_GAMUT_WIDE,
+   (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_MAX_NITS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_MODE_OFF,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_PAPER_WHITE_NITS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_VIDEO_HDR_SCANLINES,
@@ -12197,9 +12263,11 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_XMB_VERTICAL_THUMBNAILS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YES,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YOUTUBE_STREAM_KEY,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_HDR_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_APPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_PREPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_TWO,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_SWAPCHAIN_BIT_DEPTH,
 #if defined(RARCH_MOBILE)
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_X,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_Y,
@@ -12248,6 +12316,7 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_ENABLE_MENU,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_FASTFORWARD_MUTE,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_FASTFORWARD_SPEEDUP,
+   (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_FASTPATH_S16,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_FILTER_DIR,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_FORMAT_NEGOTIATION,
    (uint32_t)MENU_ENUM_SUBLABEL_AUDIO_LATENCY,
@@ -12513,6 +12582,9 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ALL_USERS_CONTROL_MENU,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_DEADZONE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_MOUSE_GRAB,
@@ -12762,6 +12834,7 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_SWAP_THUMBNAILS,
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_SWITCH_ICONS,
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_THUMBNAIL_DELAY,
+   (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_THUMBNAIL_DITHER,
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_THUMBNAIL_DOWNSCALER,
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_RGUI_TRANSPARENCY,
    (uint32_t)MENU_ENUM_SUBLABEL_MENU_SAVESTATE_RESUME,
@@ -13307,6 +13380,7 @@ static const uint32_t msg_hash_pl_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HARD_SYNC_FRAMES,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_ENABLE,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_EXPAND_GAMUT,
+   (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_MAX_NITS,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_PAPER_WHITE_NITS,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_SCANLINES,
    (uint32_t)MENU_ENUM_SUBLABEL_VIDEO_HDR_SETTINGS,

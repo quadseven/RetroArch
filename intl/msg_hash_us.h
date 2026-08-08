@@ -6942,7 +6942,7 @@ MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 
 MSG_HASH(
    MENU_ENUM_LABEL_VIDEO_HDR_ENABLE,
-   "video_hdr_mode"
+   "HDR Mode"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_HDR_ENABLE,
@@ -6966,7 +6966,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VIDEO_SWAPCHAIN_BIT_DEPTH,
-   "video_swapchain_bit_depth"
+   "Output Bit Depth"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_SWAPCHAIN_BIT_DEPTH,
@@ -10727,6 +10727,16 @@ MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #undef S_UINT_AT_EX_H
 #undef S_UINT_AT_EX_NS_H
 #undef SETTINGS_DEF_STRINGS_PASS
+#ifdef ANDROID
+MSG_HASH(
+   MENU_ENUM_LABEL_VALUE_INPUT_ANDROID_SYSTEM_KEYBOARD,
+   "Use System Keyboard"
+   )
+MSG_HASH(
+   MENU_ENUM_SUBLABEL_INPUT_ANDROID_SYSTEM_KEYBOARD,
+   "Use the Android system keyboard for menu text entry instead of the built-in on-screen keyboard. Enables clipboard paste and password managers. Requires a touchscreen or an input method that can be navigated with a gamepad."
+   )
+#endif
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS_OFF,
    "OFF"
@@ -19416,7 +19426,7 @@ MSG_HASH(MENU_ENUM_LABEL_VALUE_##T, us)
 #undef SETTINGS_DEF_STRINGS_PASS
 MSG_HASH(
    MENU_ENUM_LABEL_AI_SERVICE_BACKEND,
-   "ai_service_backend"
+   "AI Service Backend"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_AI_SERVICE_BACKEND,
@@ -19873,7 +19883,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_H,
-   "cheevos_appearance_padding_h"
+   "Manual Horizontal Padding"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_CHEEVOS_APPEARANCE_PADDING_H,
@@ -19885,7 +19895,7 @@ MSG_HASH(
    )
 MSG_HASH(
    MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_V,
-   "cheevos_appearance_padding_v"
+   "Manual Vertical Padding"
    )
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_CHEEVOS_APPEARANCE_PADDING_V,

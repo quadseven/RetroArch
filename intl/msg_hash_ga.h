@@ -14,6 +14,7 @@
 
 static const struct
 {
+   char s_74d0bdad[23];
    char s_54d907f5[12];
    char s_9a250c33[27];
    char s_dec692c9[30];
@@ -38,6 +39,8 @@ static const struct
    char s_76fae911[49];
    char s_56581215[50];
    char s_6b45243b[18];
+   char s_43585d45[32];
+   char s_43585d53[28];
    char s_ea6df2a1[127];
    char s_bfb33e98[92];
    char s_87603f77[22];
@@ -762,6 +765,9 @@ static const struct
    char s_700d45a9[26];
    char s_2a30a561[27];
    char s_6ae6f953[24];
+#ifdef ANDROID
+   char s_b573f90c[32];
+#endif
    char s_e28bc72f[26];
    char s_0b2a8528[50];
    char s_ea5757a0[7];
@@ -2393,9 +2399,11 @@ static const struct
    char s_f4b6d13e[29];
    char s_25e89959[4];
    char s_a7468d68[22];
+   char s_b1d6fea6[9];
    char s_aa0659db[25];
    char s_49757b91[25];
    char s_660eb9c4[25];
+   char s_b6ca9df2[28];
 #if defined(RARCH_MOBILE)
    char s_b754294b[59];
    char s_b754294c[59];
@@ -2713,6 +2721,9 @@ static const struct
    char s_5c8a1d63[135];
    char s_744c0f80[85];
    char s_2aa39081[49];
+#ifdef ANDROID
+   char s_50f43cfa[308];
+#endif
    char s_e85b309d[101];
    char s_cd94bb16[237];
    char s_a17a67e1[53];
@@ -4176,6 +4187,7 @@ static const struct
    char s_2dbb6496[29];
 } msg_hash_ga_blob =
 {
+   "C\303\272ltaca Seirbh\303\255se AI",
    "Aithriseoir",
    "1-Giot\303\241n, Uasluach = 0x01",
    "16-Giot\303\241n, Uasluach = 0xFFFF",
@@ -4200,6 +4212,8 @@ static const struct
    "Rith an Ch\303\251ad Aicearra Eile M\303\241 Luach < Cuimhne",
    "Rith an Ch\303\251ad Aicearra Eile M\303\241 Luach != Cuimhne",
    "Socraigh go Luach",
+   "P\303\241ip\303\251ar Cothrom\303\241nach L\303\241imhe",
+   "P\303\241ip\303\251ar Ingearach L\303\241imhe",
    "N\303\255 f\303\251idir teacht ar fhreastala\303\255 RetroAchievements. D\303\251anfaidh s\303"
    "\251 iarracht eile go n-\303\251ireoidh leis n\303\263 go nd\303\272nfar an aip.",
    "T\303\241 gach iarratas ar feitheamh sioncr\303\263naithe go rath\303\272il le freastala\303\255"
@@ -5258,6 +5272,9 @@ static const struct
    "Anal\303\263gach Deas Y- (Suas)",
    "Anal\303\263gach Deas Y+ (S\303\255os)",
    "\303\215ogaireacht Anal\303\263gach",
+#ifdef ANDROID
+   "\303\232s\303\241id M\303\251archl\303\241r an Ch\303\263rais",
+#endif
    "Cumra\303\255ocht uathoibr\303\255och",
    "Cumasaigh M\303\263d 'F\303\263cas Cluiche' go huathoibr\303\255och",
    "Braith",
@@ -6916,9 +6933,11 @@ static const struct
    "Socr\303\272 Ingearach Mionsamhail",
    "T\303\241",
    "Eochair Sruth YouTube",
+   "M\303\263d HDR",
    "R\303\251amhshocr\303\272 Sc\303\241th\303\263ra",
    "R\303\251amhshocr\303\272 Sc\303\241th\303\263ra",
    "R\303\251amhshocr\303\272 Sc\303\241th\303\263ra",
+   "Doimhneacht Giot\303\241n Aschuir",
 #if defined(RARCH_MOBILE)
    "Claonadh Ancaire Radharcphoirt X (Treoshu\303\255omh Portr\303\241ide)",
    "Claonadh Ancaire Radharcphoirt Y (Treoshu\303\255omh Portr\303\241ide)",
@@ -7463,6 +7482,13 @@ static const struct
    "D\303\251an neamhaird de ghluaiseachta\303\255 bata anal\303\263gacha faoi bhun luach an chrios "
    "marbh.",
    "Coigeartaigh \303\255ogaireacht na bata\303\255 anal\303\263gacha.",
+#ifdef ANDROID
+   "\303\232s\303\241id m\303\251archl\303\241r an ch\303\263rais Android le haghaidh iontr\303\241i"
+   "l t\303\251acs roghchl\303\241ir in ionad an mh\303\251archl\303\241ir sc\303\241ile\303\241in a"
+   "t\303\241 ionsuite. Cumasa\303\255onn s\303\251 greamaigh gearrthaisce agus bainisteoir\303\255 "
+   "pasfhocal. \303\211il\303\255onn s\303\251 sc\303\241ile\303\241n tadhaill n\303\263 modh ionchu"
+   "ir ar f\303\251idir nasclean\303\272int a dh\303\251anamh air le gamepad.",
+#endif
    "Cumra\303\255onn s\303\251 go huathoibr\303\255och rialt\303\263ir\303\255 a bhfuil pr\303\263if"
    "\303\255l acu, st\303\255l Breise\303\241n-agus-S\303\272gartha.",
    "Cumasaigh m\303\263d 'F\303\263cas Cluiche' i gc\303\263na\303\255 agus \303\241bhar \303\241 sh"
@@ -9827,7 +9853,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_ga_blob_check[
-      (sizeof(msg_hash_ga_blob) == (203505u
+      (sizeof(msg_hash_ga_blob) == (203625u
 #ifdef ANDROID
        + 390u
 #endif
@@ -9876,6 +9902,9 @@ typedef char msg_hash_ga_blob_check[
        + 12u
        + 12u
        + 23u
+#endif
+#ifdef ANDROID
+       + 32u
 #endif
 #ifdef GEKKO
        + 14u
@@ -10067,6 +10096,9 @@ typedef char msg_hash_ga_blob_check[
        + 20u
        + 23u
 #endif
+#ifdef ANDROID
+       + 308u
+#endif
 #ifdef GEKKO
        + 57u
 #endif
@@ -10242,6 +10274,7 @@ typedef char msg_hash_ga_blob_check[
 
 static const uint32_t msg_hash_ga_ids[] =
 {
+   (uint32_t)MENU_ENUM_LABEL_AI_SERVICE_BACKEND,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_HANDLER_TYPE_EMU,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_1,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_16,
@@ -10266,6 +10299,8 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_LT,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_NEQ,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_SET_TO_VALUE,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_H,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_V,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_DISCONNECTED,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_RECONNECTED,
    (uint32_t)MENU_ENUM_LABEL_EXPLORE_DELETE_VIEW,
@@ -10983,6 +11018,9 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_MINUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_PLUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS_DETECT,
@@ -12613,9 +12651,11 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_XMB_VERTICAL_THUMBNAILS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YES,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YOUTUBE_STREAM_KEY,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_HDR_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_APPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_PREPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_TWO,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_SWAPCHAIN_BIT_DEPTH,
 #if defined(RARCH_MOBILE)
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_X,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_Y,
@@ -12931,6 +12971,9 @@ static const uint32_t msg_hash_ga_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ALL_USERS_CONTROL_MENU,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_DEADZONE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_MOUSE_GRAB,

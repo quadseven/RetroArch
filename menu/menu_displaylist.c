@@ -2565,9 +2565,7 @@ static unsigned menu_displaylist_parse_system_info(file_list_t *list)
 #ifdef HAVE_FREETYPE
          {SUPPORTS_FREETYPE, "FreeType"},
 #endif
-#ifdef HAVE_STB_FONT
          {SUPPORTS_STBFONT, "STB TrueType"},
-#endif
 #ifdef HAVE_V4L2
          {SUPPORTS_V4L2, "Video4Linux2"},
 #endif
@@ -5351,7 +5349,6 @@ static unsigned menu_displaylist_parse_content_information(
       size_t _len                  = strlcpy(tmp, cheevos_hash_str, sizeof(tmp) - 4);
       tmp[  _len]                  = ':';
       tmp[++_len]                  = ' ';
-      tmp[++_len]                  = '\n';
       tmp[++_len]                  = '\0';
       strlcpy(tmp + _len, rcheevos_get_hash(), sizeof(tmp) - _len);
       if (menu_entries_append(info_list, tmp, cheevos_hash_str,
@@ -8631,6 +8628,10 @@ unsigned menu_displaylist_build_list(
                 MENU_ENUM_LABEL_INPUT_SELECT_PHYSICAL_KEYBOARD,
                 PARSE_ACTION, true) == 0)
                 count++;
+         if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
+                MENU_ENUM_LABEL_INPUT_ANDROID_SYSTEM_KEYBOARD,
+                PARSE_ONLY_BOOL, true) == 0)
+                count++;
 #endif
 
 #ifdef HAVE_LIBNX
@@ -10337,7 +10338,11 @@ unsigned menu_displaylist_build_list(
             {
                static const menu_displaylist_settings_row_t dl_rows_8[] = {
                   { MENU_ENUM_LABEL_VIDEO_DRIVER, PARSE_ONLY_STRING_OPTIONS, false },
+#ifndef __APPLE__
+                  /* Hide 'Threaded Video' from the menu on Apple platforms;
+                   * the underlying video_threaded setting itself is kept. */
                   { MENU_ENUM_LABEL_VIDEO_THREADED, PARSE_ONLY_BOOL, false },
+#endif
                   { MENU_ENUM_LABEL_VIDEO_GPU_INDEX, PARSE_ONLY_INT, false },
                   { MENU_ENUM_LABEL_VIDEO_MONITOR_INDEX, PARSE_ONLY_UINT, false },
                   { MENU_ENUM_LABEL_VIDEO_SWAPCHAIN_BIT_DEPTH, PARSE_ONLY_UINT, false },

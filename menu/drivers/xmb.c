@@ -5360,8 +5360,8 @@ XMB_NOINLINE static bool xmb_animation_line_ticker_smooth(gfx_animation_t *p_ani
       word_wrap_func      = word_wrap;
 
    /* > Height */
-   if ((glyph_height = font_driver_get_line_height(
-         line_ticker->font, line_ticker->font_scale)) <= 0)
+   if ((glyph_height = (int)roundf(line_ticker->font->metrics.height
+               * line_ticker->font_scale)) <= 0)
       goto fail;
 
    /* Determine line wrap parameters */
@@ -6003,6 +6003,7 @@ XMB_NOINLINE static int xmb_draw_item(
       ticker.len                = xmb->ticker_limit;
       ticker.str                = ticker_str;
       ticker.s                  = tmp;
+      ticker.s_len              = sizeof(tmp);
 
       if (ticker.str)
          gfx_animation_ticker(&ticker);
@@ -6100,6 +6101,7 @@ XMB_NOINLINE static int xmb_draw_item(
    else
    {
       ticker.s                  = tmp;
+      ticker.s_len              = sizeof(tmp);
       ticker.len                = ((xmb->use_ps3_layout) ? 40 : 26) * xmb->scale_mod[7];
       ticker.selected           = (i == current);
       ticker.str                = entry.value;
@@ -9930,15 +9932,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
    if (!vertical_fade_factor && selection > 1)
    {
       /* skip 25 UTF8 multi-byte chars */
-      char *end = title_truncated;
-
-      for (i = 0; i < 25 && *end; i++)
-      {
-         end++;
-         while ((*end & 0xC0) == 0x80)
-            end++;
-      }
-
+      char *end = (char*)utf8skip(title_truncated, 25);
       *end = '\0';
    }
 
@@ -10002,6 +9996,7 @@ static void xmb_frame(void *data, video_frame_info_t *video_info)
 
          ticker.str                = title_truncated;
          ticker.s                  = tmp;
+         ticker.s_len              = sizeof(tmp);
          ticker.len                = (tmp_len * xmb->last_scale_factor) / font_width;
 
          if (ticker.str)
@@ -10342,7 +10337,6 @@ static void xmb_free(void *data)
    }
 
    gfx_display_deinit_white_texture();
-   font_driver_bind_block(NULL, NULL);
 }
 
 static void xmb_context_bg_destroy(xmb_handle_t *xmb)
