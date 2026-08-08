@@ -16,24 +16,16 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <streams/file_stream.h>
+#include <file/file_path.h>
 #include <math.h>
 
 #ifdef HAVE_CONFIG_H
 #include "../config.h"
 #endif
 
-#ifdef HAVE_SDL2
-/* For the SDL_VERSION_ATLEAST gate around the SDL2 font case in
- * font_driver_init_first - sdl2_raster_font is only emitted by
- * sdl2_gfx.c when SDL >= 2.0.18 (SDL_RenderGeometry availability). */
-#include <SDL_version.h>
-#endif
-
 #include "font_driver.h"
 #include "video_thread_wrapper.h"
-
-/* TODO/FIXME - global */
-static void *video_font_driver = NULL;
 
 /* Monotonic counter incremented whenever any font instance is
  * freed. Consumers that cache per-font derived data (e.g. the
@@ -48,22 +40,10 @@ uint32_t font_driver_get_generation(void)
    return font_driver_generation;
 }
 
-static enum font_atlas_format font_atlas_preferred_format =
-      FONT_ATLAS_FORMAT_A8;
-
-void font_renderer_set_preferred_atlas_format(enum font_atlas_format fmt)
-{
-   font_atlas_preferred_format = fmt;
-}
-
-enum font_atlas_format font_renderer_get_preferred_atlas_format(void)
-{
-   return font_atlas_preferred_format;
-}
-
 int font_renderer_create_default(
       const font_renderer_driver_t **drv,
-      void **handle, const char *font_path, unsigned font_size)
+      void **handle, const char *font_path, unsigned font_size,
+      enum font_atlas_format fmt)
 {
    static const font_renderer_driver_t *font_backends[] = {
 #ifdef HAVE_FREETYPE
@@ -72,29 +52,67 @@ int font_renderer_create_default(
 #if defined(__APPLE__) && defined(HAVE_CORETEXT)
       &coretext_font_renderer,
 #endif
-#ifdef HAVE_STB_FONT
       &stb_font_renderer,
-#endif
-      &bitmap_font_renderer,
       NULL
    };
    unsigned i;
 
    for (i = 0; font_backends[i]; i++)
    {
-      const char *path = font_path;
+      const char *path      = font_path;
+      uint8_t    *data      = NULL;
+      int64_t     len       = 0;
 
       if (!path)
-         path = font_backends[i]->get_default_font();
-      if (!path)
-         continue;
+      {
+         /* Pick the first candidate that exists. Doing it here rather
+          * than in the renderer is what keeps file I/O out of them. */
+         const char * const *cand = font_backends[i]->get_default_fonts
+            ? font_backends[i]->get_default_fonts()
+            : NULL;
 
-      *handle = font_backends[i]->init(path, font_size);
+         if (!cand)
+            continue;
+
+         for (; *cand; cand++)
+         {
+            /* An empty entry means the renderer has an internal or
+             * system source and wants no file. */
+            if (!**cand)
+            {
+               path = *cand;
+               break;
+            }
+            if (path_is_valid(*cand))
+            {
+               path = *cand;
+               break;
+            }
+         }
+
+         if (!path)
+            continue;
+      }
+
+      /* Read it once, here. A failed read is not fatal: the renderer
+       * may still have an internal source to fall back on. */
+      if (path && *path)
+         if (!filestream_read_file(path, (void**)&data, &len) || len <= 0)
+         {
+            data = NULL;
+            len  = 0;
+         }
+
+      *handle = font_backends[i]->init(path, data, (size_t)len,
+            font_size, fmt);
       if (*handle)
       {
+         /* The renderer owns data now. */
          *drv = font_backends[i];
          return 1;
       }
+
+      free(data);
    }
 
    *drv    = NULL;
@@ -106,350 +124,23 @@ int font_renderer_create_default(
 static bool font_init_first(
       const void **font_driver, void **font_handle,
       void *video_data, const char *font_path, float font_size,
-      enum font_driver_render_api api, bool is_threaded)
+      const font_renderer_t *backend, bool is_threaded)
 {
+   void *data;
+
    if (font_path && !font_path[0])
       font_path = NULL;
 
-   switch (api)
-   {
-#ifdef HAVE_OPENGL1
-      case FONT_DRIVER_RENDER_OPENGL1_API:
-         {
-            void *data = gl1_raster_font.init(
-                  video_data, font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &gl1_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_OPENGL
-      case FONT_DRIVER_RENDER_OPENGL_API:
-         {
-            void *data = gl2_raster_font.init(
-                  video_data, font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &gl2_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_OPENGL_CORE
-      case FONT_DRIVER_RENDER_OPENGL_CORE_API:
-         {
-            void *data = gl3_raster_font.init(
-                  video_data, font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &gl3_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_VULKAN
-      case FONT_DRIVER_RENDER_VULKAN_API:
-         {
-            void *data = vulkan_raster_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &vulkan_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_METAL
-   case FONT_DRIVER_RENDER_METAL_API:
-         {
-            void *data = metal_raster_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &metal_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-#endif
-#ifdef HAVE_SDL2
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-      case FONT_DRIVER_RENDER_SDL2:
-         {
-            void *data = sdl2_raster_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &sdl2_raster_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#endif
-#ifdef HAVE_D3D8
-      case FONT_DRIVER_RENDER_D3D8_API:
-      {
-         static const font_renderer_t *d3d8_font_backends[] = {
-            &d3d8_font,
-            NULL
-         };
-         unsigned i;
+   if (!backend || !backend->init)
+      return false;
 
-         for (i = 0; i < ARRAY_SIZE(d3d8_font_backends); i++)
-         {
-            void *data = d3d8_font_backends[i] ? d3d8_font_backends[i]->init(
-                  video_data, font_path, font_size, is_threaded) : NULL;
-            if (data)
-            {
-               *font_driver = d3d8_font_backends[i];
-               *font_handle = data;
+   if (!(data = backend->init(video_data, font_path, font_size,
+               is_threaded)))
+      return false;
 
-               return true;
-            }
-         }
-      }
-      break;
-#endif
-#ifdef HAVE_D3D9
-      case FONT_DRIVER_RENDER_D3D9_API:
-         {
-            void *data = d3d9_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &d3d9_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-      break;
-#ifdef HAVE_CG
-      case FONT_DRIVER_RENDER_D3D9_CG_API:
-         {
-            void *data = d3d9_cg_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &d3d9_cg_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-      break;
-#endif
-#endif
-#ifdef HAVE_D3D10
-      case FONT_DRIVER_RENDER_D3D10_API:
-         {
-            void *data = d3d10_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &d3d10_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_D3D11
-      case FONT_DRIVER_RENDER_D3D11_API:
-         {
-            void *data = d3d11_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &d3d11_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_D3D12
-      case FONT_DRIVER_RENDER_D3D12_API:
-         {
-            void *data = d3d12_font.init(video_data,
-                  font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &d3d12_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_GXM
-      case FONT_DRIVER_RENDER_GXM:
-         {
-            void *data = gxm_font.init(
-                  video_data, font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &gxm_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef PS2
-      case FONT_DRIVER_RENDER_PS2:
-         {
-            void *data = ps2_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &ps2_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef _3DS
-      case FONT_DRIVER_RENDER_CTR:
-         {
-            void *data = ctr_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &ctr_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef WIIU
-      case FONT_DRIVER_RENDER_WIIU:
-         {
-            void *data = wiiu_font.init(
-                  video_data, font_path, font_size, is_threaded);
-            if (data)
-            {
-               *font_driver = &wiiu_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_CACA
-      case FONT_DRIVER_RENDER_CACA:
-         {
-            void *data = caca_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &caca_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_SIXEL
-      case FONT_DRIVER_RENDER_SIXEL:
-         {
-            void *data = sixel_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &sixel_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_LIBNX
-      case FONT_DRIVER_RENDER_SWITCH:
-         {
-            void *data = switch_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &switch_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_GCM
-      case FONT_DRIVER_RENDER_RSX:
-         {
-            void *data = rsx_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &rsx_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#ifdef HAVE_GDI
-#if defined(_WIN32) && !defined(_XBOX) && !defined(__WINRT__)
-      case FONT_DRIVER_RENDER_GDI:
-         {
-            void *data = gdi_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &gdi_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-#endif
-#ifdef DJGPP
-      case FONT_DRIVER_RENDER_VGA:
-         {
-            void *data = vga_font.init(
-                  video_data, font_path, font_size,
-                  is_threaded);
-            if (data)
-            {
-               *font_driver = &vga_font;
-               *font_handle = data;
-               return true;
-            }
-         }
-         break;
-#endif
-      case FONT_DRIVER_RENDER_DONT_CARE:
-         /* TODO/FIXME - lookup graphics driver's 'API' */
-         break;
-      default:
-         break;
-   }
-
-   return false;
+   *font_driver = backend;
+   *font_handle = data;
+   return true;
 }
 
 #ifdef HAVE_LANGEXTRA
@@ -494,7 +185,7 @@ static INLINE unsigned is_misc_ws(const unsigned char* src)
 }
 
 static INLINE unsigned font_get_arabic_replacement(
-      const char* src, const char* start)
+      const char* src, const char* start, const char* end)
 {
    /* 0x0620 to 0x064F */
    static const unsigned arabic_shape_map[0x100][0x4] = {
@@ -638,7 +329,11 @@ static INLINE unsigned font_get_arabic_replacement(
    const char*   prev           = src - 2;
    const char*   next           = src + 2;
 
-   if (IS_ARABIC(prev) && (prev >= start))
+   /* prev/next straddle src by one Arabic character (2 bytes). Bounds
+    * must be tested before IS_ARABIC dereferences them: prev can point
+    * before start when src is at the first character, and the forward
+    * scan must not read past the terminator. */
+   if ((prev >= start) && IS_ARABIC(prev))
    {
       unsigned char prev_id = GET_ID_ARABIC(prev);
 
@@ -658,7 +353,7 @@ static INLINE unsigned font_get_arabic_replacement(
          const char*   prev2    = prev - 2;
 
          if (prev2 >= start)
-            prev2_id            = (prev2[0] << 6) | (prev2[1] & 0x3F);
+            prev2_id            = GET_ID_ARABIC(prev2);
 
          /* nonspacing diacritics 0x4b -- 0x5f */
          while (prev2_id > 0x4A && prev2_id < 0x60)
@@ -687,7 +382,7 @@ static INLINE unsigned font_get_arabic_replacement(
       prev_connected = !!arabic_shape_map[prev_id][2];
    }
 
-   if (IS_ARABIC(next))
+   if ((next + 1 < end) && IS_ARABIC(next))
    {
       unsigned char next_id = GET_ID_ARABIC(next);
 
@@ -695,7 +390,7 @@ static INLINE unsigned font_get_arabic_replacement(
       while (next_id > 0x4A && next_id < 0x60)
       {
          next += 2;
-         if (!IS_ARABIC(next))
+         if ((next + 1 >= end) || !IS_ARABIC(next))
             break;
          next_id = GET_ID_ARABIC(next);
       }
@@ -711,6 +406,39 @@ static INLINE unsigned font_get_arabic_replacement(
 }
 /* clang-format on */
 
+/* True if any byte has bit 7 set.
+ *
+ * Everything the reshaper reacts to needs one: IS_MBCONT is 0x80-0xBF,
+ * IS_HEBREW 0xD6-0xD7, IS_ARABIC 0xD8-0xDB. IS_DIR_NEUTRAL does match
+ * ASCII 0x20-0x3F, but it is only consulted after an IS_RTL hit has
+ * set reverse or entered a skip loop, which plain ASCII cannot reach.
+ * So a message with no high bytes leaves the reshaper byte-identical
+ * to the way it went in. */
+static INLINE bool font_msg_has_high_byte(const char *msg, size_t msg_len)
+{
+   const unsigned char *p = (const unsigned char*)msg;
+   const unsigned char *e = p + msg_len;
+   const size_t      mask = (size_t)~(size_t)0 / 0xFF * 0x80;
+
+   while (p < e && ((uintptr_t)p & (sizeof(size_t) - 1)))
+      if (*p++ & 0x80)
+         return true;
+
+   while (p + sizeof(size_t) <= e)
+   {
+      size_t w;
+      memcpy(&w, p, sizeof(w));
+      if (w & mask)
+         return true;
+      p += sizeof(size_t);
+   }
+
+   while (p < e)
+      if (*p++ & 0x80)
+         return true;
+   return false;
+}
+
 static char* font_driver_reshape_msg(const char* msg, size_t msg_len,
       unsigned char *s, size_t len, size_t *out_len)
 {
@@ -719,6 +447,22 @@ static char* font_driver_reshape_msg(const char* msg, size_t msg_len,
    /* worst case transformations are 2 bytes to 4 bytes -- aliaspider */
    size_t               _len       = (msg_len * 2) + 1;
    unsigned char       *dst        = s;
+   /* Highest dst that can still take the longest sequence emitted
+    * below (4 bytes) plus the terminator. The 2x estimate above only
+    * holds while the walk moves forward; the reverse pass can step
+    * back over bytes it has already emitted, so output length is not
+    * actually bounded by the input length and the buffer has to be
+    * bounded directly. */
+   unsigned char       *dst_max    = s + len - 5;
+
+   /* Nothing to reshape: hand back the input and skip both the walk
+    * and the copy into s. This is every English HUD string, including
+    * the statistics block s is sized for. */
+   if (!font_msg_has_high_byte(msg, msg_len))
+   {
+      *out_len = msg_len;
+      return (char*)msg;
+   }
 
    if (len < _len)
    {
@@ -747,7 +491,7 @@ static char* font_driver_reshape_msg(const char* msg, size_t msg_len,
 
    src = (const unsigned char*)msg;
 
-   while (*src || reverse)
+   while ((*src || reverse) && dst < dst_max)
    {
       if (reverse)
       {
@@ -760,7 +504,7 @@ static char* font_driver_reshape_msg(const char* msg, size_t msg_len,
             if (IS_ARABIC(src))
             {
                unsigned replacement = font_get_arabic_replacement(
-                     (const char*)src, msg);
+                     (const char*)src, msg, (const char*)msg + msg_len);
 
                if (replacement)
                {
@@ -794,7 +538,7 @@ static char* font_driver_reshape_msg(const char* msg, size_t msg_len,
             }
 
             *dst++ = *src++;
-            while (IS_MBCONT(src))
+            while (IS_MBCONT(src) && dst < dst_max)
                *dst++ = *src++;
             src--;
 
@@ -838,7 +582,7 @@ void font_driver_render_msg(void *data, const char *msg, size_t msg_len,
       const struct font_params *params, void *font_data)
 {
    font_data_t                *font = (font_data_t*)(font_data
-         ? font_data : video_font_driver);
+         ? font_data : (void*)video_state_get_ptr()->osd_font);
    const font_renderer_t *renderer  = (font && msg && msg_len)
    ? font->renderer : NULL;
 
@@ -862,7 +606,7 @@ void font_driver_render_msg(void *data, const char *msg, size_t msg_len,
 
 void font_driver_bind_block(void *font_data, void *block)
 {
-   font_data_t *font = (font_data_t*)(font_data ? font_data : video_font_driver);
+   font_data_t *font               = (font_data_t*)font_data;
    const font_renderer_t *renderer = font ? font->renderer : NULL;
    if (renderer && renderer->bind_block)
       renderer->bind_block(font->renderer_data, block);
@@ -885,69 +629,12 @@ void font_flush(
 int font_driver_get_message_width(void *font_data,
       const char *msg, size_t len, float scale)
 {
-   font_data_t *font = (font_data_t*)(font_data ? font_data : video_font_driver);
+   font_data_t *font               = (font_data_t*)(font_data
+         ? font_data : (void*)video_state_get_ptr()->osd_font);
    const font_renderer_t *renderer = font ? font->renderer : NULL;
    if (renderer && renderer->get_message_width)
       return renderer->get_message_width(font->renderer_data, msg, len, scale);
    return -1;
-}
-
-int font_driver_get_line_height(font_data_t *font, float scale)
-{
-   struct font_line_metrics *metrics = NULL;
-   const font_renderer_t *renderer   = font ? font->renderer : NULL;
-   /* First try the line metrics implementation */
-   if (renderer && renderer->get_line_metrics)
-      if ((renderer->get_line_metrics(
-                  font->renderer_data, &metrics)))
-         return (int)roundf(metrics->height * scale);
-   /* Else return an approximation
-    * (uses a fudge of standard font metrics - mostly garbage...)
-    * > font_size = (width of 'a') / 0.6
-    * > line_height = font_size * 1.7f */
-   return (int)roundf(1.7f * (float)font_driver_get_message_width(font, "a", 1, scale) / 0.6f);
-}
-
-int font_driver_get_line_ascender(font_data_t *font, float scale)
-{
-   struct font_line_metrics *metrics = NULL;
-   const font_renderer_t *renderer   = font ? font->renderer : NULL;
-   /* First try the line metrics implementation */
-   if (renderer && renderer->get_line_metrics)
-      if ((renderer->get_line_metrics(font->renderer_data, &metrics)))
-         return (int)roundf(metrics->ascender * scale);
-   /* Else return an approximation
-    * (uses a fudge of standard font metrics - mostly garbage...)
-    * > font_size = (width of 'a') / 0.6
-    * > ascender = 1.58 * font_size * 0.75 */
-   return (int)roundf(1.58f * 0.75f * (float)font_driver_get_message_width(font, "a", 1, scale) / 0.6f);
-}
-
-int font_driver_get_line_descender(font_data_t *font, float scale)
-{
-   struct font_line_metrics *metrics = NULL;
-   const font_renderer_t *renderer   = font ? font->renderer : NULL;
-   /* First try the line metrics implementation */
-   if (renderer && renderer->get_line_metrics)
-      if ((renderer->get_line_metrics(font->renderer_data, &metrics)))
-         return (int)roundf(metrics->descender * scale);
-   /* Else return an approximation
-    * (uses a fudge of standard font metrics - mostly garbage...)
-    * > font_size = (width of 'a') / 0.6
-    * > descender = 1.58 * font_size * 0.25 */
-   return (int)roundf(1.58f * 0.25f * (float)font_driver_get_message_width(font, "a", 1, scale) / 0.6f);
-}
-
-int font_driver_get_line_centre_offset(font_data_t *font, float scale)
-{
-   struct font_line_metrics *metrics = NULL;
-   const font_renderer_t *renderer   = font ? font->renderer : NULL;
-   /* First try the line metrics implementation */
-   if (renderer && renderer->get_line_metrics)
-      if ((renderer->get_line_metrics(font->renderer_data, &metrics)))
-         return (int)roundf((metrics->ascender - metrics->descender) * 0.5f * scale);
-   /* Else return an approximation... */
-   return (int)roundf((1.58f * 0.5f * (float)font_driver_get_message_width(font, "a", 1, scale) / 0.6f) / 2.0f);
 }
 
 #ifdef HAVE_THREADS
@@ -1030,7 +717,10 @@ void font_driver_free(font_data_t *font)
       font_driver_generation++;
 
 #ifdef HAVE_THREADS
-      is_threaded             = *video_driver_get_threaded();
+      /* Ask for the real threaded state, not the video_threaded
+       * setting. The two differ when a hw-render core is loaded,
+       * since that forces the video driver to run non-threaded. */
+      is_threaded = video_driver_is_threaded();
 #endif
 
       font_driver_release_renderer_state(font->renderer,
@@ -1046,7 +736,7 @@ void font_driver_free(font_data_t *font)
 font_data_t *font_driver_init_first(
       void *video_data, const char *font_path, float font_size,
       bool threading_hint, bool is_threaded,
-      enum font_driver_render_api api)
+      const font_renderer_t *backend)
 {
    const void *font_driver = NULL;
    void *font_handle       = NULL;
@@ -1056,12 +746,12 @@ font_data_t *font_driver_init_first(
          && is_threaded
          && !video_driver_is_hw_context())
       ok = video_thread_font_init(&font_driver, &font_handle,
-            video_data, font_path, font_size, api, font_init_first,
+            video_data, font_path, font_size, backend, font_init_first,
             is_threaded);
    else
 #endif
    ok = font_init_first(&font_driver, &font_handle,
-         video_data, font_path, font_size, api, is_threaded);
+         video_data, font_path, font_size, backend, is_threaded);
 
    if (ok)
    {
@@ -1069,9 +759,33 @@ font_data_t *font_driver_init_first(
 
       if (font)
       {
+         struct font_line_metrics *m = NULL;
+
          font->renderer      = (const font_renderer_t*)font_driver;
          font->renderer_data = font_handle;
          font->size          = font_size;
+
+         if (     font->renderer->get_line_metrics
+               && font->renderer->get_line_metrics(font->renderer_data, &m)
+               && m)
+            font->metrics    = *m;
+         else
+         {
+            /* Renderer has no metrics of its own. Approximate from
+             * the width of 'a', which is what the old
+             * font_driver_get_line_*() helpers fell back to:
+             *   font_size = width('a') / 0.6
+             *   height    = font_size * 1.7
+             *   ascender  = font_size * 1.58 * 0.75
+             *   descender = font_size * 1.58 * 0.25 */
+            float sz = 0.0f;
+            if (font->renderer->get_message_width)
+               sz = (float)font->renderer->get_message_width(
+                     font->renderer_data, "a", 1, 1.0f) / 0.6f;
+            font->metrics.height    = sz * 1.7f;
+            font->metrics.ascender  = sz * 1.58f * 0.75f;
+            font->metrics.descender = sz * 1.58f * 0.25f;
+         }
          return font;
       }
 
@@ -1091,23 +805,55 @@ font_data_t *font_driver_init_first(
    return NULL;
 }
 
+/* Unconditional release. Callers outside this file must go through
+ * font_driver_free_osd_for(), which will not touch a font belonging to
+ * another driver instance. */
+static void font_driver_free_osd(void)
+{
+   video_driver_state_t *video_st = video_state_get_ptr();
+
+   if (video_st->osd_font)
+      font_driver_free((font_data_t*)video_st->osd_font);
+
+   video_st->osd_font       = NULL;
+   video_st->osd_font_owner = NULL;
+}
+
 void font_driver_init_osd(
       void *video_data,
       const video_info_t *video_info,
-      bool threading_hint,
       bool is_threaded,
-      enum font_driver_render_api api)
+      const font_renderer_t *backend)
 {
-   if (!video_font_driver && video_info)
-      video_font_driver = font_driver_init_first(video_data,
+   /* A font left over from a different instance cannot be adopted:
+    * its images belong to a device that is gone, whose handles the
+    * new one will recycle. Drop it rather than keep it. Guarding on
+    * presence alone is what let a stale font survive a reinit. */
+   video_driver_state_t *video_st = video_state_get_ptr();
+
+   if (video_st->osd_font && video_st->osd_font_owner != video_data)
+      font_driver_free_osd();
+
+   /* threading_hint is false: both callers - video_driver_init_internal()
+    * and the threaded wrapper's CMD_INIT - already run on the thread that
+    * owns the graphics context, so there is nothing to marshal. The hint
+    * exists for callers that do not, such as gfx_display. */
+   if (!video_st->osd_font && video_info)
+      video_st->osd_font = font_driver_init_first(video_data,
             *video_info->path_font ? video_info->path_font : NULL,
-            video_info->font_size, threading_hint, is_threaded, api);
+            video_info->font_size, false, is_threaded, backend);
+
+   if (video_st->osd_font)
+      video_st->osd_font_owner = video_data;
 }
 
-void font_driver_free_osd(void)
+void font_driver_free_osd_for(void *video_data)
 {
-   if (video_font_driver)
-      font_driver_free((font_data_t*)video_font_driver);
+   /* Only the owner may free it. Teardown of an instance that no
+    * longer owns the font - a stale or deferred free - must leave the
+    * live one alone. */
+   video_driver_state_t *video_st = video_state_get_ptr();
 
-   video_font_driver = NULL;
+   if (video_st->osd_font && video_st->osd_font_owner == video_data)
+      font_driver_free_osd();
 }

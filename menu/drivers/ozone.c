@@ -3765,6 +3765,7 @@ OZONE_NOINLINE static void ozone_draw_sidebar(
                   ? ticker_field_width / ozone->fonts.sidebar.glyph_width
                   : 0;
             ticker.s        = console_title;
+            ticker.s_len    = sizeof(console_title);
             ticker.selected = selected;
             ticker.str      = title;
 
@@ -3925,6 +3926,7 @@ OZONE_NOINLINE static void ozone_draw_sidebar(
                      ? ticker_field_width / ozone->fonts.sidebar.glyph_width
                      : 0;
                ticker.s        = console_title;
+               ticker.s_len    = sizeof(console_title);
                ticker.selected = selected;
                ticker.str      = node->console_name;
 
@@ -6179,6 +6181,7 @@ border_iterate:
       else
       {
          ticker.s        = rich_label;
+         ticker.s_len    = sizeof(rich_label);
          ticker.str      = entry_rich_label;
          ticker.selected = entry_selected && (!(ozone->flags & OZONE_FLAG_CURSOR_IN_SIDEBAR));
          ticker.len      = (entry_width - ozone->dimensions.entry_icon_padding * 6) / ozone->fonts.entries_label.glyph_width;
@@ -6476,6 +6479,7 @@ border_iterate:
       else
       {
          ticker.s        = entry_value_ticker;
+         ticker.s_len    = sizeof(entry_value_ticker);
          ticker.str      = entry_value;
          ticker.selected = entry_selected && (!(ozone->flags & OZONE_FLAG_CURSOR_IN_SIDEBAR));
          ticker.len      = (entry_width
@@ -6959,6 +6963,7 @@ static void ozone_draw_thumbnail_bar(
             ticker.selected                  = true;
             ticker.len                       = (sidebar_width - (separator_padding * 2)) / ozone->fonts.footer.glyph_width;
             ticker.s                         = ticker_buf;
+            ticker.s_len                     = sizeof(ticker_buf);
          }
       }
 
@@ -9815,8 +9820,6 @@ static void ozone_free(void *data)
    }
 
    gfx_display_deinit_white_texture();
-
-   font_driver_bind_block(NULL, NULL);
 }
 
 static void ozone_update_thumbnail_image(void *data)
@@ -9942,9 +9945,10 @@ static bool ozone_init_font(
          font_data->wideglyph_width = wideglyph_width * 100 / glyph_width;
    }
 
-   font_data->line_height        = font_driver_get_line_height(font_data->font, 1.0f);
-   font_data->line_ascender      = font_driver_get_line_ascender(font_data->font, 1.0f);
-   font_data->line_centre_offset = font_driver_get_line_centre_offset(font_data->font, 1.0f);
+   font_data->line_height        = (int)roundf(font_data->font->metrics.height);
+   font_data->line_ascender      = (int)roundf(font_data->font->metrics.ascender);
+   font_data->line_centre_offset = (int)roundf((font_data->font->metrics.ascender
+         - font_data->font->metrics.descender) * 0.5f);
 
    return true;
 }
@@ -11322,6 +11326,7 @@ OZONE_NOINLINE static void ozone_draw_header(
    else
    {
       ticker.s        = title;
+      ticker.s_len    = sizeof(title);
       ticker.len      = video_width - status_row_size / ozone->fonts.title.glyph_width;
       ticker.str      = (ozone->flags2 & OZONE_FLAG2_WANT_FULLSCREEN_THUMBNAILS)
             ? ozone->fullscreen_thumbnail_label
@@ -12073,6 +12078,7 @@ static void ozone_draw_footer(
             ticker.spacer               = (ozone->font_unicode) ? OZONE_TICKER_SPACER : NULL;
 
             ticker.s                    = core_title_buf;
+            ticker.s_len                = sizeof(core_title_buf);
             ticker.len                  = usable_width / ozone->fonts.footer.glyph_width;
             ticker.str                  = core_title;
             ticker.selected             = true;
@@ -12411,12 +12417,24 @@ static void ozone_frame(void *data, video_frame_info_t *video_info)
       goto ctx_destroyed;
 
    /* Clear text */
-   font_bind(&ozone->fonts.footer);
-   font_bind(&ozone->fonts.title);
-   font_bind(&ozone->fonts.time);
-   font_bind(&ozone->fonts.entries_label);
-   font_bind(&ozone->fonts.entries_sublabel);
-   font_bind(&ozone->fonts.sidebar);
+   font_driver_bind_block(ozone->fonts.footer.font,
+         &ozone->fonts.footer.raster_block);
+   ozone->fonts.footer.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(ozone->fonts.title.font,
+         &ozone->fonts.title.raster_block);
+   ozone->fonts.title.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(ozone->fonts.time.font,
+         &ozone->fonts.time.raster_block);
+   ozone->fonts.time.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(ozone->fonts.entries_label.font,
+         &ozone->fonts.entries_label.raster_block);
+   ozone->fonts.entries_label.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(ozone->fonts.entries_sublabel.font,
+         &ozone->fonts.entries_sublabel.raster_block);
+   ozone->fonts.entries_sublabel.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(ozone->fonts.sidebar.font,
+         &ozone->fonts.sidebar.raster_block);
+   ozone->fonts.sidebar.raster_block.carr.coords.vertices = 0;
 
    /* Single-click playlist button hold delay */
    if (ozone->animations.list_alpha == 0.0f && ozone->draw_entry_delay)
@@ -12730,12 +12748,12 @@ static void ozone_frame(void *data, video_frame_info_t *video_info)
    }
 
    /* Unbind fonts */
-   font_unbind(&ozone->fonts.footer);
-   font_unbind(&ozone->fonts.title);
-   font_unbind(&ozone->fonts.time);
-   font_unbind(&ozone->fonts.entries_label);
-   font_unbind(&ozone->fonts.entries_sublabel);
-   font_unbind(&ozone->fonts.sidebar);
+   font_driver_bind_block(ozone->fonts.footer.font, NULL);
+   font_driver_bind_block(ozone->fonts.title.font, NULL);
+   font_driver_bind_block(ozone->fonts.time.font, NULL);
+   font_driver_bind_block(ozone->fonts.entries_label.font, NULL);
+   font_driver_bind_block(ozone->fonts.entries_sublabel.font, NULL);
+   font_driver_bind_block(ozone->fonts.sidebar.font, NULL);
 
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(

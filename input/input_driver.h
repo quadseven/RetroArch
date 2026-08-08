@@ -96,7 +96,7 @@
 #define DEFAULT_MAX_PADS 4
 #elif defined(DINGUX)
 #define DEFAULT_MAX_PADS 2
-#elif defined(EMSCRIPTEN)
+#elif defined(__EMSCRIPTEN__)
 #define DEFAULT_MAX_PADS 4
 #else
 #define DEFAULT_MAX_PADS 16
@@ -1068,6 +1068,30 @@ void input_keyboard_line_append(
 void input_keyboard_line_clear(input_driver_state_t *input_st);
 void input_keyboard_line_free(input_driver_state_t *input_st);
 
+#ifdef ANDROID
+/**
+ * android_keyboard_start:
+ * @buffer_ptr               : Pointer to the keyboard line buffer.
+ * @size_ptr                 : Pointer to the keyboard line size.
+ * @ptr_ptr                  : Pointer to the keyboard line cursor.
+ * @label                    : Hint shown on the keyboard, or NULL.
+ * @cb                       : Line complete callback function.
+ * @userdata                 : Userdata passed to the callback.
+ *
+ * Raises the native Android (IME) keyboard for menu text entry, made to
+ * mirror the iOS ios_keyboard_* hooks. Swaps the custom on-screen keyboard
+ * for the system soft keyboard, enabling paste and password managers.
+ * Implemented in input/drivers/android_input.c.
+ *
+ * Returns: true if the keyboard was shown.
+ **/
+bool android_keyboard_start(char **buffer_ptr, size_t *size_ptr,
+      size_t *ptr_ptr, const char *label,
+      input_keyboard_line_complete_t cb, void *userdata);
+bool android_keyboard_active(void);
+void android_keyboard_end(void);
+#endif
+
 /**
  * input_keyboard_start_line:
  * @userdata                 : Userdata.
@@ -1249,6 +1273,7 @@ extern hid_driver_t *hid_drivers[];
 
 extern input_driver_t input_android;
 extern input_driver_t input_sdl;
+extern input_driver_t input_sdl3;
 extern input_driver_t input_sdl_dingux;
 extern input_driver_t input_dinput;
 extern input_driver_t input_x;
@@ -1278,8 +1303,9 @@ extern input_device_driver_t linuxraw_joypad;
 extern input_device_driver_t parport_joypad;
 extern input_device_driver_t udev_joypad;
 extern input_device_driver_t xinput_joypad;
-extern input_device_driver_t sdl_joypad; /* SDL2 or SDL3. @see sdl_joypad.c, sdl3_joypad.c. */
+extern input_device_driver_t sdl_joypad; /** SDL1 or SDL2. @see sdl_joypad.c. */
 extern input_device_driver_t sdl_dingux_joypad;
+extern input_device_driver_t sdl3_joypad; /** SDL3. @see sdl3_joypad.c */
 extern input_device_driver_t ps4_joypad;
 extern input_device_driver_t ps3_joypad;
 extern input_device_driver_t psp_joypad;

@@ -334,9 +334,7 @@ OBJ     += state_manager.o
 endif
 
 OBJ += \
-       gfx/drivers_font_renderer/bitmapfont.o \
-       gfx/drivers_font_renderer/bitmapfont_10x10.o \
-       gfx/drivers_font_renderer/bitmapfont_6x10.o \
+       gfx/bitmapfont.o \
        tasks/task_autodetect.o \
        input/input_autodetect_builtin.o \
        input/input_keymaps.o \
@@ -359,6 +357,7 @@ OBJ += \
        core_backup.o \
        core_option_manager.o \
        $(LIBRETRO_COMM_DIR)/file/config_file.o \
+	$(LIBRETRO_COMM_DIR)/file/config_file_io.o \
        $(LIBRETRO_COMM_DIR)/file/config_file_userdata.o \
        runtime_file.o \
        disk_index_file.o
@@ -1035,7 +1034,8 @@ ifeq ($(HAVE_MENU), 1)
    endif
 
    ifeq ($(HAVE_RGUI), 1)
-      OBJ += menu/drivers/rgui.o
+      OBJ += menu/drivers/rgui.o \
+             menu/drivers/rgui_bitmapfont.o
       DEFINES += -DHAVE_RGUI
    endif
 
@@ -1156,10 +1156,7 @@ ifeq ($(HAVE_OVERLAY), 1)
           led/drivers/led_overlay.o
 endif
 
-ifeq ($(HAVE_STB_FONT), 1)
-   OBJ += gfx/drivers_font_renderer/stb.o
-   DEFINES += -DHAVE_STB_FONT
-endif
+OBJ += gfx/drivers_font_renderer/stb.o
 
 ifeq ($(HAVE_FREETYPE), 1)
    OBJ += gfx/drivers_font_renderer/freetype.o
@@ -1518,6 +1515,12 @@ ifeq ($(HAVE_NETWORK_VIDEO), 1)
    OBJ += gfx/drivers/network_gfx.o
 endif
 
+ifeq ($(HAVE_HUB75), 1)
+   DEFINES += -DHAVE_HUB75
+   OBJ += gfx/drivers/hub75_gfx.o
+   LIBS += -lrt -lm -lpthread
+endif
+
 ifeq ($(HAVE_PLAIN_DRM), 1)
    OBJ += gfx/drivers/drm_gfx.o
    ifneq ($(HAVE_LAKKA), 1)
@@ -1664,7 +1667,10 @@ ifeq ($(HAVE_SDL3), 1)
    # Filter it out.
    LIBS += $(filter-out -lSDL3main -lSDLmain -lSDL_main,$(SDL3_LIBS))
 	DEFINES += -DHAVE_SDL3
-   OBJ += input/drivers_joypad/sdl3_joypad.o
+   OBJ += input/drivers_joypad/sdl3_joypad.o \
+          input/drivers/sdl3_input.o \
+          gfx/drivers/sdl3_gfx.o \
+          gfx/common/sdl3_common.o
 else ifeq ($(HAVE_SDL2), 1)
    HAVE_SDL_COMMON = 1
    OBJ += gfx/drivers/sdl2_gfx.o \
@@ -2290,7 +2296,13 @@ ifeq ($(HAVE_RMP4), 1)
    OBJ += $(LIBRETRO_COMM_DIR)/formats/mp4/rmp4.o \
           $(LIBRETRO_COMM_DIR)/formats/mp4/rmp4_video.o \
           $(LIBRETRO_COMM_DIR)/formats/mp4/rmp4_audio.o \
-          $(LIBRETRO_COMM_DIR)/formats/h264/rh264.o
+          $(LIBRETRO_COMM_DIR)/formats/h264/rh264.o \
+          $(LIBRETRO_COMM_DIR)/formats/h265/rh265.o
+ifneq ($(HAVE_RVP9), 1)
+   # rmp4_video's H.265 Main10 arm uses the shared 10-bit / HDR
+   # I420->RGB blits; normally linked from the HAVE_RVP9 block below.
+   OBJ += $(LIBRETRO_COMM_DIR)/formats/image/image_hdr_blit.o
+endif
 ifneq ($(HAVE_RWEBP), 1)
 ifneq ($(HAVE_RWEBM), 1)
    # rmp4_video decodes VP8 tracks with rvp8, normally built with RWEBP
@@ -2305,6 +2317,14 @@ ifeq ($(HAVE_RVP9), 1)
    # Shared 10-bit / HDR I420->RGB blits, used by both the webm and mp4
    # rvp9 paths; kept demuxer-independent so neither has to link the other.
    OBJ += $(LIBRETRO_COMM_DIR)/formats/image/image_hdr_blit.o
+endif
+
+ifeq ($(HAVE_RMPEG1), 1)
+   DEFINES += -DHAVE_RMPEG1
+   OBJ += $(LIBRETRO_COMM_DIR)/formats/mpeg1/rmpeg1_ps.o \
+          $(LIBRETRO_COMM_DIR)/formats/mpeg1/rmpeg1_video.o
+   # MPEG-1 audio is layer II, which rmp3 already decodes; a consumer that
+   # wants sound from an MPEG-1 stream needs HAVE_RMP3 as well.
 endif
 
 ifeq ($(HAVE_WEBMPLAYER), 1)
@@ -2547,7 +2567,8 @@ ifeq ($(HAVE_NETWORKING), 1)
              deps/rcheevos/src/rapi/rc_api_user.o \
 
       # RVZ/WIA disc image support for RetroAchievements
-      ifneq ($(filter 1,$(HAVE_ZSTD) $(HAVE_RZSTD)),)
+      HAVE_CHEEVOS_RVZ ?= $(if $(filter 1,$(HAVE_ZSTD) $(HAVE_RZSTD)),1,0)
+      ifeq ($(HAVE_CHEEVOS_RVZ), 1)
          DEFINES += -DHAVE_CHEEVOS_RVZ
          OBJ += cheevos/cheevos_rvz.o
       endif

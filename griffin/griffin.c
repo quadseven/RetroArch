@@ -194,6 +194,7 @@ CONFIG FILE
 
 #ifdef HAVE_CONFIGFILE
 #include "../libretro-common/file/config_file.c"
+#include "../libretro-common/file/config_file_io.c"
 #include "../libretro-common/file/config_file_userdata.c"
 #endif
 
@@ -321,7 +322,7 @@ VIDEO CONTEXT
 #include "../gfx/display_servers/dispserv_android.c"
 #elif defined(__QNX__)
 #include "../gfx/drivers_context/qnx_ctx.c"
-#elif defined(EMSCRIPTEN)
+#elif defined(__EMSCRIPTEN__)
 #include "../gfx/drivers_context/emscriptenegl_ctx.c"
 #elif defined(__PS3__)
 #include "../gfx/drivers_context/ps3_ctx.c"
@@ -483,6 +484,7 @@ VIDEO IMAGE
 
 #ifdef HAVE_RMP4
 #include "../libretro-common/formats/h264/rh264.c"
+#include "../libretro-common/formats/h265/rh265.c"
 #include "../libretro-common/formats/mp4/rmp4.c"
 #include "../libretro-common/formats/mp4/rmp4_video.c"
 #include "../libretro-common/formats/mp4/rmp4_audio.c"
@@ -490,6 +492,15 @@ VIDEO IMAGE
 
 #ifdef HAVE_RVP9
 #include "../libretro-common/formats/vp9/rvp9.c"
+#endif
+
+#ifdef HAVE_RMPEG1
+#include "../libretro-common/formats/mpeg1/rmpeg1_ps.c"
+#include "../libretro-common/formats/mpeg1/rmpeg1_video.c"
+#endif
+#if defined(HAVE_RVP9) || defined(HAVE_RMP4)
+/* Shared 10-bit / HDR I420->RGB blits: used by the webm/mp4 rvp9 paths
+ * and by rmp4_video's H.265 Main10 arm, so RMP4 alone needs them too. */
 #include "../libretro-common/formats/image/image_hdr_blit.c"
 #endif
 #ifdef HAVE_RDDS
@@ -648,18 +659,14 @@ VIDEO DRIVER
 FONTS
 ============================================================ */
 
-#include "../gfx/drivers_font_renderer/bitmapfont.c"
+#include "../gfx/bitmapfont.c"
 
 #ifdef HAVE_LANGEXTRA
-#include "../gfx/drivers_font_renderer/bitmapfont_10x10.c"
-#include "../gfx/drivers_font_renderer/bitmapfont_6x10.c"
 #endif
 
 #include "../gfx/font_driver.c"
 
-#if defined(HAVE_STB_FONT)
 #include "../gfx/drivers_font_renderer/stb.c"
-#endif
 
 #if defined(HAVE_FREETYPE)
 #include "../gfx/drivers_font_renderer/freetype.c"
@@ -750,7 +757,7 @@ INPUT
 #elif defined(__QNX__)
 #include "../input/drivers/qnx_input.c"
 #include "../input/drivers_joypad/qnx_joypad.c"
-#elif defined(EMSCRIPTEN)
+#elif defined(__EMSCRIPTEN__)
 #include "../input/drivers/rwebinput_input.c"
 #include "../input/drivers_joypad/rwebpad_joypad.c"
 #elif defined(DJGPP)
@@ -886,7 +893,7 @@ CAMERA
 #include "../camera/camera_driver.c"
 #if defined(ANDROID)
 #include "../camera/drivers/android.c"
-#elif defined(EMSCRIPTEN)
+#elif defined(__EMSCRIPTEN__)
 #include "../camera/drivers/rwebcam.c"
 #endif
 
@@ -967,6 +974,9 @@ AUDIO
 
 #if defined(HAVE_SDL3)
 #include "../input/drivers_joypad/sdl3_joypad.c"
+#include "../input/drivers/sdl3_input.c"
+#include "../gfx/drivers/sdl3_gfx.c"
+#include "../gfx/common/sdl3_common.c"
 #elif defined(HAVE_SDL2)
 #include "../audio/drivers/sdl_audio.c"
 #include "../input/drivers/sdl_input.c"
@@ -1471,6 +1481,7 @@ MENU
 #endif
 
 #ifdef HAVE_RGUI
+#include "../menu/drivers/rgui_bitmapfont.c"
 #include "../menu/drivers/rgui.c"
 #endif
 

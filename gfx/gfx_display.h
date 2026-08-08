@@ -103,7 +103,8 @@ enum gfx_display_driver_type
    GFX_VIDEO_DRIVER_GDI,
    GFX_VIDEO_DRIVER_SWITCH,
    GFX_VIDEO_DRIVER_RSX,
-   GFX_VIDEO_DRIVER_SDL2
+   GFX_VIDEO_DRIVER_SDL2,
+   GFX_VIDEO_DRIVER_SDL3
 };
 
 typedef struct gfx_display_ctx_draw gfx_display_ctx_draw_t;
@@ -129,7 +130,7 @@ typedef struct gfx_display_ctx_driver
    const float *(*get_default_vertices)(void);
    /* Get the default texture coordinates matrix */
    const float *(*get_default_tex_coords)(void);
-   enum font_driver_render_api  font_type;
+   const struct font_renderer  *font_backend;
    enum gfx_display_driver_type type;
    const char *ident;
    bool handles_transform;
@@ -375,6 +376,7 @@ extern gfx_display_ctx_driver_t gfx_display_ctx_gdi;
 extern gfx_display_ctx_driver_t gfx_display_ctx_switch;
 extern gfx_display_ctx_driver_t gfx_display_ctx_rsx;
 extern gfx_display_ctx_driver_t gfx_display_ctx_sdl2;
+extern gfx_display_ctx_driver_t gfx_display_ctx_sdl3;
 
 RETRO_END_DECLS
 

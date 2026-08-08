@@ -379,7 +379,7 @@ command_t* command_stdin_new(void)
    command_t *cmd;
    command_stdin_t *stdincmd;
 
-#if !(defined(_WIN32) || defined(EMSCRIPTEN))
+#if !(defined(_WIN32) || defined(__EMSCRIPTEN__))
 #ifdef HAVE_NETWORKING
    if (!socket_nonblock(STDIN_FILENO))
       return NULL;
@@ -409,7 +409,7 @@ command_t* command_stdin_new(void)
 }
 #endif
 
-#if defined(EMSCRIPTEN)
+#if defined(__EMSCRIPTEN__)
 #include "frontend/drivers/platform_emscripten.h"
 typedef struct
 {
@@ -1081,8 +1081,17 @@ bool command_load_core(command_t *cmd, const char* arg)
    if (!arg || !*arg)
       return false;
 
+#ifdef IOS
+   {
+      char exp[PATH_MAX_LENGTH];
+      fill_pathname_expand_special(exp, arg, sizeof(exp));
+      return task_push_load_new_core(exp, NULL,
+            &content_info, CORE_TYPE_PLAIN, NULL, NULL);
+   }
+#else
    return task_push_load_new_core(arg, NULL,
          &content_info, CORE_TYPE_PLAIN, NULL, NULL);
+#endif
 }
 
 /* START_CORE
@@ -1128,8 +1137,17 @@ bool command_load_content(command_t *cmd, const char* arg)
    memcpy(core_path, arg, _len);
    core_path[_len] = '\0';
 
+#ifdef IOS
+   {
+      char exp[PATH_MAX_LENGTH];
+      fill_pathname_expand_special(exp, sep + 1, sizeof(exp));
+      return task_push_load_content_with_new_core_from_companion_ui(
+            core_path, exp, NULL, NULL, NULL, &content_info, NULL, NULL);
+   }
+#else
    return task_push_load_content_with_new_core_from_companion_ui(
          core_path, sep + 1, NULL, NULL, NULL, &content_info, NULL, NULL);
+#endif
 }
 
 /* CLOSE_CONTENT
