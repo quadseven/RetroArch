@@ -2427,6 +2427,11 @@ endif
 ifeq ($(HAVE_OTLP_LOG_EXPORT), 1)
    DEFINES += -DHAVE_OTLP_LOG_EXPORT
    OBJ += otlp_log_exporter.o
+   # Metrics ride the log exporter's worker, config and transport rather than
+   # standing up a second thread and a second endpoint setting. They are not
+   # separately switchable for that reason: one of the two working while the
+   # other silently did not is a failure mode worth designing out.
+   OBJ += otlp_metrics.o
 endif
 
 ifeq ($(HAVE_NETWORKING), 1)

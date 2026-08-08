@@ -14,6 +14,7 @@
 #include <string/stdstring.h>
 
 #include "otlp_log_exporter.h"
+#include "otlp_metrics.h"
 
 /* Defined below; used by init before its definition. */
 static void otlp_write_status(const char *fmt, ...);
@@ -120,6 +121,10 @@ typedef struct
    unsigned        stat_sent;
    unsigned        stat_dropped;
    unsigned        stat_failures;
+   /* Separate from stat_failures: a metrics outage and a logs outage have
+    * different causes and different fixes, and a status line reporting one
+    * number cannot tell them apart. */
+   unsigned        stat_metric_failures;
    char            last_error[160];
    char            config_dir[256];
 } otlp_state_t;
@@ -357,14 +362,14 @@ static char *otlp_build_payload(const otlp_record_t *batch, unsigned n)
    return out;
 }
 
-static bool otlp_post(const char *body)
+static bool otlp_post_to(const char *url, const char *body)
 {
    struct http_connection_t *conn = NULL;
    struct http_t *http            = NULL;
    bool ok                        = false;
    int status                     = 0;
 
-   if (!(conn = net_http_connection_new(otlp_st.url, "POST", body)))
+   if (!(conn = net_http_connection_new(url, "POST", body)))
    {
       slock_lock(otlp_st.lock);
       strlcpy(otlp_st.last_error, "could not create connection",
@@ -416,6 +421,36 @@ static bool otlp_post(const char *body)
    net_http_delete(http);
    net_http_connection_free(conn);
    return ok;
+}
+
+static bool otlp_post(const char *body)
+{
+   return otlp_post_to(otlp_st.url, body);
+}
+
+/* Metrics go to /v1/metrics on the same host. Derived from the log URL rather
+ * than read from a second config file: one endpoint setting that can be wrong
+ * is better than two that can disagree. */
+static void otlp_metrics_url(char *out, size_t out_len)
+{
+   const char *suffix = "/v1/logs";
+   size_t ulen        = strlen(otlp_st.url);
+   size_t slen        = strlen(suffix);
+
+   if (ulen > slen && strcmp(otlp_st.url + ulen - slen, suffix) == 0)
+   {
+      size_t base = ulen - slen;
+
+      if (base >= out_len)
+         base = out_len - 1;
+      memcpy(out, otlp_st.url, base);
+      out[base] = '\0';
+      strlcat(out, "/v1/metrics", out_len);
+      return;
+   }
+
+   strlcpy(out, otlp_st.url, out_len);
+   strlcat(out, "/v1/metrics", out_len);
 }
 
 /* ------------------------------------------------------------------ */
@@ -477,6 +512,36 @@ static void otlp_worker(void *unused)
       }
 
       slock_unlock(otlp_st.lock);
+
+      /*
+       * Metrics ship before the empty-batch check, and unconditionally.
+       *
+       * Sharing this worker was meant to share the network's schedule, not to
+       * make one signal conditional on another. A quiet interval where nothing
+       * logged is exactly when a core is running normally, and that is when the
+       * frame numbers matter most. Gated behind an empty log batch they would
+       * disappear whenever things were going well.
+       */
+      {
+         char *m;
+
+         otlp_metrics_sample_video();
+         otlp_metrics_sample_process();
+
+         if ((m = otlp_metrics_build_payload(otlp_st.resource_attrs)))
+         {
+            char murl[576];
+
+            otlp_metrics_url(murl, sizeof(murl));
+            if (!otlp_post_to(murl, m))
+            {
+               slock_lock(otlp_st.lock);
+               otlp_st.stat_metric_failures++;
+               slock_unlock(otlp_st.lock);
+            }
+            free(m);
+         }
+      }
 
       if (n > 0)
       {
