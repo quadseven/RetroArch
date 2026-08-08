@@ -155,19 +155,44 @@ void otlp_metrics_sample_video(void)
 
       if (thr)
       {
+         /* primed, rather than a zero or UINT_MAX sentinel.
+          *
+          * These are running totals, so a delta needs a previous reading to
+          * subtract. With last_hits starting at zero the first sample reports
+          * hits - 0, which is every frame drawn since RetroArch started
+          * attributed to one interval: a spike of thousands the moment export
+          * begins, and it looks like real data.
+          *
+          * A UINT_MAX sentinel also works, by making the first comparison fail.
+          * It is not used because UINT_MAX is a value these counters could in
+          * principle hold, so the sentinel and the data are indistinguishable
+          * to a reader. An explicit flag cannot be confused for a frame count.
+          *
+          * The first sample therefore establishes the baseline and emits
+          * nothing. One interval of frames is lost at startup, which is the
+          * correct trade against one fabricated spike. */
+         static bool     primed;
          static unsigned last_hits;
          static unsigned last_misses;
          unsigned hits   = thr->hit_count;
          unsigned misses = thr->miss_count;
 
-         /* Deltas, and guarded against the counters going backwards, which
-          * they do when the driver is torn down and rebuilt on a core change.
-          * Without the guard a core switch reports a single enormous negative
-          * frame count. */
-         if (hits >= last_hits)
-            otlp_metric_add("retroarch.frames_pushed", (int64_t)(hits - last_hits));
-         if (misses >= last_misses)
-            otlp_metric_add("retroarch.frames_dropped", (int64_t)(misses - last_misses));
+         if (!primed)
+            primed = true;
+         else
+         {
+            /* Guarded against the counters going backwards, which they do when
+             * the driver is torn down and rebuilt on a core change. Without the
+             * guard the unsigned subtraction wraps and a core switch reports a
+             * delta of about four billion frames. Skipping the emit and
+             * re-baselining is the recovery. */
+            if (hits >= last_hits)
+               otlp_metric_add("retroarch.frames_pushed",
+                     (int64_t)(hits - last_hits));
+            if (misses >= last_misses)
+               otlp_metric_add("retroarch.frames_dropped",
+                     (int64_t)(misses - last_misses));
+         }
 
          last_hits   = hits;
          last_misses = misses;
