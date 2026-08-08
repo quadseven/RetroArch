@@ -5044,6 +5044,7 @@ static void materialui_render_menu_entry_default(
                   entry_value_len      = entry_value_len_max;
 
                mui->ticker.s           = value_buf;
+               mui->ticker.s_len       = sizeof(value_buf);
                mui->ticker.len         = entry_value_len;
                mui->ticker.str         = entry_value;
 
@@ -5149,6 +5150,7 @@ static void materialui_render_menu_entry_default(
          {
             /* Label */
             mui->ticker.s        = label_buf;
+            mui->ticker.s_len    = sizeof(label_buf);
             mui->ticker.len      = (size_t)(label_width / mui->font_data.list.glyph_width);
             mui->ticker.str      = entry_label;
 
@@ -5375,6 +5377,7 @@ static void materialui_render_menu_entry_playlist_list(
          {
             /* Label */
             mui->ticker.s        = label_buf;
+            mui->ticker.s_len    = sizeof(label_buf);
             mui->ticker.len      = (size_t)(usable_width / mui->font_data.list.glyph_width);
             mui->ticker.str      = entry_label;
 
@@ -5557,6 +5560,7 @@ static void materialui_render_menu_entry_playlist_dual_icon(
          {
             /* Label */
             mui->ticker.s   = label_buf;
+            mui->ticker.s_len = sizeof(label_buf);
             mui->ticker.len = (size_t)(usable_width / mui->font_data.list.glyph_width);
             mui->ticker.str = entry_label;
 
@@ -5668,6 +5672,7 @@ static void materialui_render_menu_entry_playlist_desktop(
          {
             mui->ticker.selected = entry_selected;
             mui->ticker.s        = label_buf;
+            mui->ticker.s_len    = sizeof(label_buf);
             mui->ticker.len      = (size_t)(usable_width / mui->font_data.list.glyph_width);
             mui->ticker.str      = entry_label;
 
@@ -5902,6 +5907,7 @@ static void materialui_render_menu_entry_savestate_list(
                   entry_value_len      = entry_value_len_max;
 
                mui->ticker.s           = value_buf;
+               mui->ticker.s_len       = sizeof(value_buf);
                mui->ticker.len         = entry_value_len;
                mui->ticker.str         = entry_value;
 
@@ -5987,6 +5993,7 @@ static void materialui_render_menu_entry_savestate_list(
          {
             mui->ticker.selected = entry_selected;
             mui->ticker.s        = label_buf;
+            mui->ticker.s_len    = sizeof(label_buf);
             mui->ticker.len      = (size_t)(usable_width / mui->font_data.list.glyph_width);
             mui->ticker.str      = entry_label;
 
@@ -6272,6 +6279,7 @@ static void materialui_render_selected_entry_aux_playlist_desktop(
          {
             mui->ticker.selected = true;
             mui->ticker.s        = metadata_buf;
+            mui->ticker.s_len    = sizeof(metadata_buf);
             mui->ticker.len      = (size_t)(text_width / mui->font_data.hint.glyph_width);
             mui->ticker.str      = mui->status_bar.str;
 
@@ -7155,6 +7163,7 @@ MUI_NOINLINE static void materialui_render_header(
       else
       {
          mui->ticker.s        = core_title_buf;
+         mui->ticker.s_len    = sizeof(core_title_buf);
          mui->ticker.len      = (unsigned)(usable_sys_bar_width / mui->font_data.hint.glyph_width);
          mui->ticker.str      = core_title;
          mui->ticker.selected = true;
@@ -7286,6 +7295,7 @@ MUI_NOINLINE static void materialui_render_header(
    else
    {
       mui->ticker.s        = menu_title_buf;
+      mui->ticker.s_len    = sizeof(menu_title_buf);
       mui->ticker.len      = (unsigned)(usable_title_bar_width / mui->font_data.title.glyph_width) - 1;
       mui->ticker.str      = menu_title;
       mui->ticker.selected = true;
@@ -8366,9 +8376,15 @@ static void materialui_frame(void *data, video_frame_info_t *video_info)
       goto ctx_destroyed;
 
    /* Clear text */
-   font_bind(&mui->font_data.title);
-   font_bind(&mui->font_data.list);
-   font_bind(&mui->font_data.hint);
+   font_driver_bind_block(mui->font_data.title.font,
+         &mui->font_data.title.raster_block);
+   mui->font_data.title.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(mui->font_data.list.font,
+         &mui->font_data.list.raster_block);
+   mui->font_data.list.raster_block.carr.coords.vertices = 0;
+   font_driver_bind_block(mui->font_data.hint.font,
+         &mui->font_data.hint.raster_block);
+   mui->font_data.hint.raster_block.carr.coords.vertices = 0;
 
    /* Single-click playlist button hold delay */
    if (mui->transition_alpha_lock && mui->draw_entry_delay)
@@ -8618,9 +8634,9 @@ static void materialui_frame(void *data, video_frame_info_t *video_info)
    mui->flags &= ~MUI_FLAG_FIRST_FRAME;
 
    /* Unbind fonts */
-   font_unbind(&mui->font_data.title);
-   font_unbind(&mui->font_data.list);
-   font_unbind(&mui->font_data.hint);
+   font_driver_bind_block(mui->font_data.title.font, NULL);
+   font_driver_bind_block(mui->font_data.list.font, NULL);
+   font_driver_bind_block(mui->font_data.hint.font, NULL);
 
    if (video_st->current_video && video_st->current_video->set_viewport)
       video_st->current_video->set_viewport(
@@ -9364,9 +9380,10 @@ static void materialui_init_font(gfx_display_t *p_disp,
       }
 
       /* Get line metrics */
-      font_data->line_height        = font_driver_get_line_height(font_data->font, 1.0f);
-      font_data->line_ascender      = font_driver_get_line_ascender(font_data->font, 1.0f);
-      font_data->line_centre_offset = font_driver_get_line_centre_offset(font_data->font, 1.0f);
+      font_data->line_height        = (int)roundf(font_data->font->metrics.height);
+      font_data->line_ascender      = (int)roundf(font_data->font->metrics.ascender);
+      font_data->line_centre_offset = (int)roundf((font_data->font->metrics.ascender
+            - font_data->font->metrics.descender) * 0.5f);
    }
 }
 
@@ -9675,8 +9692,6 @@ static void materialui_free(void *data)
    video_coord_array_free(&mui->font_data.hint.raster_block.carr);
 
    gfx_display_deinit_white_texture();
-
-   font_driver_bind_block(NULL, NULL);
 
    materialui_free_playlist_icon_list(mui);
 

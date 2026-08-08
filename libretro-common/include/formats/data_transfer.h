@@ -174,6 +174,27 @@ bool data_transfer_window_is_reserved(data_transfer_t *dt);
  * would silently take the wrong branch. */
 bool data_transfer_reserve_supported(void);
 bool data_transfer_window_extend(data_transfer_t *dt, size_t hi);
+/* Make an arbitrary byte range resident and read, without touching
+ * the sequential window: pages between the frontier and the range
+ * stay uncommitted.  This is what lets a trailing MP4 moov become
+ * readable without paging the multi-gigabyte mdat before it through
+ * memory.  Idempotent; safe to overlap the head, the window, or a
+ * previous island.  The island stays resident until the handle is
+ * freed - the decommit sweeps only run below the sequential
+ * frontier, which an island by construction sits above.  Callers
+ * must only dereference bytes inside the head, the window, or a
+ * range this call has covered. */
+bool data_transfer_window_ensure(data_transfer_t *dt, size_t lo,
+      size_t hi);
+/* Restart the sequential window at pos: after a need-range open
+ * jumped over the mdat to a trailing moov, the read frontier still
+ * sits at the head, and the first extend() toward the media would
+ * read the skipped gigabytes after all.  Rebasing moves the frontier
+ * to the media floor so extend()/advance() stream the samples from
+ * there, exactly as they do for a front-moov file from the head.
+ * No-op when pos does not lie past the frontier, so front-moov files
+ * are unaffected. */
+void data_transfer_window_rebase(data_transfer_t *dt, size_t pos);
 void data_transfer_window_advance(data_transfer_t *dt, size_t lo);
 void data_transfer_window_rewind(data_transfer_t *dt);
 /* Raise the permanently-resident head.  For codecs whose loop
@@ -219,9 +240,10 @@ void data_transfer_arena_release(data_transfer_arena_t *a);
  * complete() keeps its whole-file meaning for every consumer.
  *
  * On platforms without address-space reservation the buffer degrades
- * to a plain allocation of min(len, commit_cap) (or a built-in
- * window when commit_cap is 0), so callers there should treat the
- * cap as advisory sizing. */
+ * to a plain allocation of min(len, commit_cap), or of the whole file
+ * when commit_cap is 0.  There is no built-in ceiling: a caller that
+ * asks for no cap gets no cap, and a file too large for memory is
+ * refused at open rather than presented as a capped prefix. */
 data_transfer_t *data_transfer_open_prefix(const char *path,
       size_t commit_cap);
 
@@ -304,6 +326,17 @@ bool data_transfer_failed(data_transfer_t *dt);
 
 /* Close, cancelling any in-flight read.  NULL-safe. */
 void data_transfer_free(data_transfer_t *dt);
+
+/* Release the calling thread's pooled reservations.
+ *
+ * A prefix transfer over a file small enough to fit a pool slot
+ * recycles its reservation instead of releasing it, which skips the
+ * first-touch faults that dominate a small load.  The pool holds a
+ * bounded amount of memory per thread between loads; this hands it
+ * back - for a low-memory signal, or when a thread is done loading.
+ * Purely an optimisation either way: nothing needs to call it, and a
+ * flushed pool simply refills. */
+void data_transfer_pool_flush(void);
 
 RETRO_END_DECLS
 

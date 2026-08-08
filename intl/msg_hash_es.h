@@ -14,6 +14,7 @@
 
 static const struct
 {
+   char s_74d0bdad[27];
    char s_54d907f5[9];
    char s_9a250c33[28];
    char s_dec692c9[32];
@@ -38,6 +39,8 @@ static const struct
    char s_76fae911[69];
    char s_56581215[69];
    char s_6b45243b[14];
+   char s_43585d45[32];
+   char s_43585d53[30];
    char s_ea6df2a1[164];
    char s_bfb33e98[94];
    char s_87603f77[15];
@@ -757,6 +760,9 @@ static const struct
    char s_700d45a9[29];
    char s_2a30a561[28];
    char s_6ae6f953[24];
+#ifdef ANDROID
+   char s_b573f90c[29];
+#endif
    char s_e28bc72f[27];
    char s_0b2a8528[55];
    char s_ea5757a0[9];
@@ -2379,9 +2385,11 @@ static const struct
    char s_f4b6d13e[36];
    char s_25e89959[4];
    char s_a7468d68[33];
+   char s_b1d6fea6[9];
    char s_aa0659db[21];
    char s_49757b91[21];
    char s_660eb9c4[21];
+   char s_b6ca9df2[30];
 #if defined(RARCH_MOBILE)
    char s_b754294b[97];
    char s_b754294c[97];
@@ -2698,6 +2706,9 @@ static const struct
    char s_5c8a1d63[125];
    char s_744c0f80[90];
    char s_2aa39081[50];
+#ifdef ANDROID
+   char s_50f43cfa[274];
+#endif
    char s_e85b309d[102];
    char s_cd94bb16[223];
    char s_a17a67e1[87];
@@ -4157,6 +4168,7 @@ static const struct
    char s_2dbb6496[39];
 } msg_hash_es_blob =
 {
+   "Back-end de servicio de IA",
    "Emulador",
    "1 bit, valor m\303\241ximo = 0x01",
    "16 bits, valor m\303\241ximo = 0xFFFF",
@@ -4181,6 +4193,8 @@ static const struct
    "Ejecutar el siguiente truco si el valor es inferior al de la memoria",
    "Ejecutar el siguiente truco si el valor es distinto al de la memoria",
    "Asignar valor",
+   "Compensaci\303\263n horizontal manual",
+   "Compensaci\303\263n vertical manual",
    "El servidor de RetroAchievements no est\303\241 disponible. Se intentar\303\241 reenviar la info"
    "rmaci\303\263n hasta que se confirme su llegada o hasta que se cierre la aplicaci\303\263n.",
    "Todas las solicitudes pendientes han sido sincronizadas con el servidor de RetroAchievements.",
@@ -5142,6 +5156,9 @@ static const struct
    "Anal\303\263gico dcho. Y- (arriba)",
    "Anal\303\263gico dcho. Y+ (abajo)",
    "Sensibilidad anal\303\263gica",
+#ifdef ANDROID
+   "Utilizar teclado del sistema",
+#endif
    "Configuraci\303\263n autom\303\241tica",
    "Activar autom\303\241ticamente el modo de prioridad al juego",
    "Detectar",
@@ -6776,9 +6793,11 @@ static const struct
    "Disposici\303\263n vertical de miniaturas",
    "S\303\255",
    "Clave de transmisi\303\263n de YouTube",
+   "Modo HDR",
    "Preajuste de shaders",
    "Preajuste de shaders",
    "Preajuste de shaders",
+   "Profundidad de bits de salida",
 #if defined(RARCH_MOBILE)
    "Compensaci\303\263n del eje X del punto de anclaje del \303\241rea de visualizaci\303\263n (orie"
    "ntaci\303\263n vertical)",
@@ -7249,6 +7268,12 @@ static const struct
    "desactivada, solo podr\303\241 hacerlo el usuario 1.",
    "Ignora los movimientos del stick anal\303\263gico si su valor es inferior al de la zona muerta.",
    "Ajusta la sensibilidad de los sticks anal\303\263gicos.",
+#ifdef ANDROID
+   "Utiliza el teclado del sistema de Android para introducir textos en los men\303\272s en vez del "
+   "integrado. Permite usar el portapapeles y los administradores de contrase\303\261as. Es necesari"
+   "o tener una pantalla t\303\241ctil o un m\303\251todo de entrada en el que se pueda navegar con "
+   "un mando.",
+#endif
    "Configura de forma autom\303\241tica aquellos mandos para los que exista un perfil, a lo \302"
    "\253Plug and Play\302\273.",
    "Activa el modo de prioridad al juego al iniciar y reanudar contenidos de forma autom\303\241tica"
@@ -9333,7 +9358,7 @@ static const struct
  * compiler that pads this struct fails here instead of
  * misindexing at runtime. */
 typedef char msg_hash_es_blob_check[
-      (sizeof(msg_hash_es_blob) == (207594u
+      (sizeof(msg_hash_es_blob) == (207722u
 #ifdef ANDROID
        + 329u
 #endif
@@ -9385,6 +9410,9 @@ typedef char msg_hash_es_blob_check[
        + 10u
        + 10u
        + 20u
+#endif
+#ifdef ANDROID
+       + 29u
 #endif
 #ifdef GEKKO
        + 18u
@@ -9576,6 +9604,9 @@ typedef char msg_hash_es_blob_check[
        + 20u
        + 23u
 #endif
+#ifdef ANDROID
+       + 274u
+#endif
 #ifdef GEKKO
        + 79u
 #endif
@@ -9751,6 +9782,7 @@ typedef char msg_hash_es_blob_check[
 
 static const uint32_t msg_hash_es_ids[] =
 {
+   (uint32_t)MENU_ENUM_LABEL_AI_SERVICE_BACKEND,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_HANDLER_TYPE_EMU,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_1,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_MEMORY_SIZE_16,
@@ -9775,6 +9807,8 @@ static const uint32_t msg_hash_es_ids[] =
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_LT,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_RUN_NEXT_IF_NEQ,
    (uint32_t)MENU_ENUM_LABEL_CHEAT_TYPE_SET_TO_VALUE,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_H,
+   (uint32_t)MENU_ENUM_LABEL_CHEEVOS_APPEARANCE_PADDING_V,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_DISCONNECTED,
    (uint32_t)MENU_ENUM_LABEL_CHEEVOS_SERVER_RECONNECTED,
    (uint32_t)MENU_ENUM_LABEL_EXPLORE_DELETE_VIEW,
@@ -10488,6 +10522,9 @@ static const uint32_t msg_hash_es_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_MINUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_RIGHT_Y_PLUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_INPUT_AUTO_GAME_FOCUS_DETECT,
@@ -12109,9 +12146,11 @@ static const uint32_t msg_hash_es_ids[] =
    (uint32_t)MENU_ENUM_LABEL_VALUE_XMB_VERTICAL_THUMBNAILS,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YES,
    (uint32_t)MENU_ENUM_LABEL_VALUE_YOUTUBE_STREAM_KEY,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_HDR_ENABLE,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_APPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_PREPEND_TWO,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_SHADER_PRESET_TWO,
+   (uint32_t)MENU_ENUM_LABEL_VIDEO_SWAPCHAIN_BIT_DEPTH,
 #if defined(RARCH_MOBILE)
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_X,
    (uint32_t)MENU_ENUM_LABEL_VIDEO_VIEWPORT_BIAS_PORTRAIT_Y,
@@ -12426,6 +12465,9 @@ static const uint32_t msg_hash_es_ids[] =
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ALL_USERS_CONTROL_MENU,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_DEADZONE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANALOG_SENSITIVITY,
+#ifdef ANDROID
+   (uint32_t)MENU_ENUM_SUBLABEL_INPUT_ANDROID_SYSTEM_KEYBOARD,
+#endif
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTODETECT_ENABLE,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_GAME_FOCUS,
    (uint32_t)MENU_ENUM_SUBLABEL_INPUT_AUTO_MOUSE_GRAB,

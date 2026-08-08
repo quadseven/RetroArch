@@ -1586,16 +1586,37 @@ error:
    return false;
 }
 
+static bool playlist_replace_file(const char *from, const char *to);
+
 void playlist_write_runtime_file(playlist_t *playlist)
 {
    size_t i, _len;
    intfstream_t *file  = NULL;
    rjsonwriter_t* writer = NULL;
+   bool wrote_ok       = false;
+   char write_path[PATH_MAX_LENGTH];
 
    if (!playlist || !(playlist->flags & CNT_PLAYLIST_FLG_MOD))
       return;
 
-   if (!(file = intfstream_open_file(playlist->config.path,
+   /* Write to a temporary and move it into place, the same way
+    * playlist_write_file does.  The runtime file holds accumulated
+    * play time and last-played stamps for every entry, so a crash, a
+    * power loss or a full disk part way through the write would
+    * otherwise truncate history that cannot be recovered - and this
+    * file is rewritten every time content is closed.  The temporary
+    * sits in the same directory so the move stays within one
+    * filesystem. */
+   _len = strlcpy(write_path, playlist->config.path, sizeof(write_path));
+   if (_len + STRLEN_CONST(".tmp") >= sizeof(write_path))
+   {
+      RARCH_ERR("[Playlist] Path too long to write safely: \"%s\".\n",
+            playlist->config.path);
+      return;
+   }
+   strlcpy(write_path + _len, ".tmp", sizeof(write_path) - _len);
+
+   if (!(file = intfstream_open_file(write_path,
          RETRO_VFS_FILE_ACCESS_WRITE, RETRO_VFS_FILE_ACCESS_HINT_NONE)))
    {
       RARCH_ERR("[Playlist] Failed to write to file: \"%s\".\n", playlist->config.path);
@@ -1700,16 +1721,37 @@ void playlist_write_runtime_file(playlist_t *playlist)
 
    rjsonwriter_add_spaces(writer, 2);
    rjsonwriter_raw(writer, "]\n}\n", 4);
-   rjsonwriter_free(writer);
 
-   playlist->flags          &= ~(CNT_PLAYLIST_FLG_MOD
+   /* The writer's own failure is the signal that the temporary is
+    * incomplete; without it a short write would be moved over good
+    * runtime data, and clearing the modified flag below would tell
+    * the caller the data was saved when it was lost. */
+   if (!(wrote_ok = rjsonwriter_free(writer)))
+      RARCH_ERR("[Playlist] Failed to write to file: \"%s\".\n",
+            write_path);
+   writer                    = NULL;
+
+   if (wrote_ok)
+      playlist->flags       &= ~(CNT_PLAYLIST_FLG_MOD
                                | CNT_PLAYLIST_FLG_OLD_FMT
                                | CNT_PLAYLIST_FLG_COMPRESSED);
 
-   RARCH_DBG("[Playlist] Runtime written to file: \"%s\".\n", playlist->config.path);
 end:
    intfstream_close(file);
    free(file);
+
+   /* Only now does the new content replace the old one.  If anything
+    * above failed, the temporary is discarded and what is on disk is
+    * exactly what it was. */
+   if (wrote_ok && playlist_replace_file(write_path, playlist->config.path))
+      RARCH_DBG("[Playlist] Runtime written to file: \"%s\".\n",
+            playlist->config.path);
+   else
+   {
+      filestream_delete(write_path);
+      RARCH_ERR("[Playlist] Failed to write runtime file: \"%s\".\n",
+            playlist->config.path);
+   }
 }
 
 /* A playlist file has just been written.  If the cached playlist is a
@@ -2795,13 +2837,16 @@ static bool playlist_read_file(playlist_t *playlist)
    }
    else
    {
-      size_t i;
       size_t _len = RBUF_LEN(playlist->entries);
-      char line_buf[PLAYLIST_ENTRIES][PATH_MAX_LENGTH] = {{0}};
+      /* Heap-held: at six entries this is 3 KiB even at the console
+       * path length, on the playlist load path that runs from task
+       * threads.  On allocation failure the legacy-format file simply
+       * reads as empty, matching every other read failure here. */
+      char (*line_buf)[PATH_MAX_LENGTH] = (char (*)[PATH_MAX_LENGTH])
+            calloc(PLAYLIST_ENTRIES, PATH_MAX_LENGTH);
 
-      /* Unnecessary, but harmless */
-      for (i = 0; i < PLAYLIST_ENTRIES; i++)
-         line_buf[i][0] = '\0';
+      if (!line_buf)
+         goto end;   /* reads as an empty playlist, like a missing file */
 
       /* Read playlist entries */
       while (_len < playlist->config.capacity)
@@ -2969,6 +3014,7 @@ static bool playlist_read_file(playlist_t *playlist)
             break;
          }
       }
+      free(line_buf);
    }
 
 end:
@@ -3088,6 +3134,7 @@ playlist_t *playlist_init(const playlist_config_t *config)
    playlist->scan_record.search_recursively = false;
    playlist->scan_record.search_archives    = false;
    playlist->scan_record.filter_dat_content = false;
+   playlist->scan_record.overwrite_playlist = false;
    playlist->scan_record.omit_db_ref        = false;
    playlist->scan_record.content_dir        = NULL;
    playlist->scan_record.file_exts          = NULL;

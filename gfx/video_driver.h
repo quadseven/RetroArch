@@ -840,6 +840,22 @@ typedef struct video_driver
     * vtable slot. */
    bool (*read_viewport_hdr)(void *data, uint16_t *buffer, bool is_idle,
          struct rpng_hdr_metadata *out_meta);
+
+   /* Optional. When non-NULL, the OSD font is created and
+    * destroyed for this driver by the layer above - by
+    * video_driver_init_internal()/video_driver_free_internal() when
+    * running unthreaded, and by the CMD_INIT/CMD_FREE handlers in
+    * video_thread_wrapper.c (which run on the video thread) when
+    * threaded. Drivers that declare it must not call
+    * font_driver_init_osd()/font_driver_free_osd() themselves.
+    *
+    * Leaving it NULL keeps the driver responsible for its own
+    * OSD font, which is what every unmigrated driver still does.
+    *
+    * Placed last, after read_viewport_hdr, so drivers using positional
+    * initializers leave it zero (== DONT_CARE) without shifting any
+    * other vtable slot. */
+   const struct font_renderer *font_backend;
 } video_driver_t;
 
 typedef struct
@@ -951,6 +967,16 @@ typedef struct
     * native 10-bit source surface. Allocated lazily on first use. */
    uint32_t *pix10_convert_buf;
    size_t    pix10_convert_cap;
+
+   /* The OSD font, and the video driver instance it was built
+    * against. Created and destroyed alongside that instance by
+    * video_driver_init_internal()/video_driver_free_internal(), or by
+    * the threaded wrapper's CMD_INIT/CMD_FREE. font_driver.c reads it
+    * as the implicit font when a caller passes NULL, and keys
+    * creation and destruction on the owner so that a teardown running
+    * out of order cannot strand or steal it. */
+   struct font_data *osd_font;
+   void             *osd_font_owner;
 } video_driver_state_t;
 
 typedef struct video_frame_delay_auto
@@ -1416,6 +1442,14 @@ bool video_context_driver_get_flags(gfx_ctx_flags_t *flags);
 
 bool video_driver_test_all_flags(enum display_flags testflag);
 
+/**
+ * video_driver_supports_10bit_source:
+ *
+ * Whether a native 10-bit source surface can be presented. Safe to call
+ * before the video driver exists, unlike the raw flag test.
+ **/
+bool video_driver_supports_10bit_source(void);
+
 size_t video_driver_set_gpu_api_version_string(const char *str);
 
 const char* video_driver_get_gpu_api_version_string(void);
@@ -1514,6 +1548,7 @@ extern video_driver_t video_xenon360;
 extern video_driver_t video_xvideo;
 extern video_driver_t video_sdl;
 extern video_driver_t video_sdl2;
+extern video_driver_t video_sdl3;
 extern video_driver_t video_sdl_dingux;
 extern video_driver_t video_sdl_rs90;
 extern video_driver_t video_vg;
@@ -1529,6 +1564,7 @@ extern video_driver_t video_vga;
 extern video_driver_t video_fpga;
 extern video_driver_t video_sixel;
 extern video_driver_t video_network;
+extern video_driver_t video_hub75;
 extern video_driver_t video_oga;
 extern video_driver_t video_null;
 

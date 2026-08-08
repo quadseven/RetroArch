@@ -20,6 +20,7 @@
 /* TODO/FIXME - turn this into actual task */
 
 #include <stdint.h>
+#include <limits.h>
 #include <string.h>
 
 #include <boolean.h>
@@ -82,7 +83,6 @@ struct bps_data
    size_t source_relative_offset;
    size_t target_relative_offset;
    size_t output_offset;
-   uint32_t modify_checksum;
    uint32_t source_checksum;
    uint32_t target_checksum;
 };
@@ -98,7 +98,6 @@ struct ups_data
    unsigned patch_offset;
    unsigned source_offset;
    unsigned target_offset;
-   unsigned patch_checksum;
    unsigned source_checksum;
    unsigned target_checksum;
 };
@@ -108,27 +107,42 @@ typedef enum patch_error (*patch_func_t)(const uint8_t*, uint64_t,
 
 static uint8_t bps_read(struct bps_data *bps)
 {
-   uint8_t data         = bps->modify_data[bps->modify_offset++];
-   bps->modify_checksum = ~(encoding_crc32(
-         ~bps->modify_checksum, &data, 1));
-   return data;
+   /* Reads past the end yield zeroes rather than walking off the
+    * buffer. The rolling per-byte checksum that used to live here is
+    * gone - the patch bytes are one contiguous span, so the modify
+    * checksum is folded in one call at the point it is compared. */
+   if (bps->modify_offset < bps->modify_length)
+      return bps->modify_data[bps->modify_offset++];
+   bps->modify_offset++;
+   return 0x00;
 }
 
-static uint64_t bps_decode(struct bps_data *bps)
+static bool bps_decode(struct bps_data *bps, uint64_t *out)
 {
    uint64_t data = 0, shift = 1;
 
    for (;;)
    {
-      uint8_t x  = bps_read(bps);
+      uint8_t x;
+
+      if (bps->modify_offset >= bps->modify_length)
+         return false;
+      x = bps->modify_data[bps->modify_offset++];
+      if ((uint64_t)(x & 0x7f) > (UINT64_MAX - data) / shift)
+         return false;
       data      += (x & 0x7f) * shift;
       if (x & 0x80)
-         break;
+      {
+         *out = data;
+         return true;
+      }
+      if (shift > UINT64_MAX >> 7)
+         return false;
       shift    <<= 7;
+      if (data > UINT64_MAX - shift)
+         return false;
       data      += shift;
    }
-
-   return data;
 }
 
 static enum patch_error bps_apply_patch(
@@ -158,9 +172,8 @@ static enum patch_error bps_apply_patch(
    bps.modify_offset          = 0;
    bps.source_offset          = 0;
    bps.target_offset          = 0;
-   bps.modify_checksum        = ~0;
    bps.source_checksum        = 0;
-   bps.target_checksum        = ~0;
+   bps.target_checksum        = 0;
    bps.source_relative_offset = 0;
    bps.target_relative_offset = 0;
    bps.output_offset          = 0;
@@ -172,9 +185,14 @@ static enum patch_error bps_apply_patch(
       return PATCH_PATCH_INVALID_HEADER;
 
    {
-      uint64_t raw_source = bps_decode(&bps);
-      uint64_t raw_target = bps_decode(&bps);
-      uint64_t raw_markup = bps_decode(&bps);
+      uint64_t raw_source;
+      uint64_t raw_target;
+      uint64_t raw_markup;
+
+      if (   !bps_decode(&bps, &raw_source)
+          || !bps_decode(&bps, &raw_target)
+          || !bps_decode(&bps, &raw_markup))
+         return PATCH_PATCH_INVALID;
 
       /* All three sizes are decoded from attacker-controlled
        * variable-length integers in the patch file with no
@@ -225,8 +243,14 @@ static enum patch_error bps_apply_patch(
 
    while (bps.modify_offset < bps.modify_length - 12)
    {
-      size_t _len   = bps_decode(&bps);
-      unsigned mode = _len & 3;
+      uint64_t decoded_len;
+      size_t _len;
+      unsigned mode;
+
+      if (!bps_decode(&bps, &decoded_len))
+         return PATCH_PATCH_INVALID;
+      _len = (size_t)decoded_len;
+      mode = _len & 3;
 
       _len          = (_len >> 2) + 1;
 
@@ -251,12 +275,9 @@ static enum patch_error bps_apply_patch(
              * bound applies to source_data too. */
             if (bps.output_offset + _len > bps.source_length)
                return PATCH_SOURCE_INVALID;
-            while (_len--)
-            {
-               uint8_t data = bps.source_data[bps.output_offset];
-               bps.target_data[bps.output_offset++] = data;
-               bps.target_checksum = ~(encoding_crc32(~bps.target_checksum, &data, 1));
-            }
+            memcpy(bps.target_data + bps.output_offset,
+                   bps.source_data + bps.output_offset, _len);
+            bps.output_offset += _len;
             break;
 
          case TARGET_READ:
@@ -268,19 +289,23 @@ static enum patch_error bps_apply_patch(
              * past modify_length. */
             if (bps.modify_offset + _len > bps.modify_length - 12)
                return PATCH_PATCH_INVALID;
-            while (_len--)
-            {
-               uint8_t data = bps_read(&bps);
-               bps.target_data[bps.output_offset++] = data;
-               bps.target_checksum = ~(encoding_crc32(~bps.target_checksum, &data, 1));
-            }
+            memcpy(bps.target_data + bps.output_offset,
+                   bps.modify_data + bps.modify_offset, _len);
+            bps.output_offset += _len;
+            bps.modify_offset += _len;
             break;
 
          case SOURCE_COPY:
          case TARGET_COPY:
          {
-            int    offset = (int)bps_decode(&bps);
-            bool negative = offset & 1;
+            uint64_t decoded_offset;
+            int      offset;
+            bool negative;
+
+            if (!bps_decode(&bps, &decoded_offset))
+               return PATCH_PATCH_INVALID;
+            offset = (int)decoded_offset;
+            negative = offset & 1;
 
             offset >>= 1;
 
@@ -303,12 +328,10 @@ static enum patch_error bps_apply_patch(
                if (   bps.source_offset > bps.source_length
                    || _len              > bps.source_length - bps.source_offset)
                   return PATCH_SOURCE_INVALID;
-               while (_len--)
-               {
-                  uint8_t data = bps.source_data[bps.source_offset++];
-                  bps.target_data[bps.output_offset++] = data;
-                  bps.target_checksum = ~(encoding_crc32(~bps.target_checksum, &data, 1));
-               }
+               memcpy(bps.target_data + bps.output_offset,
+                      bps.source_data + bps.source_offset, _len);
+               bps.output_offset += _len;
+               bps.source_offset += _len;
             }
             else
             {
@@ -320,11 +343,22 @@ static enum patch_error bps_apply_patch(
                if (   bps.target_offset > bps.target_length
                    || _len              > bps.target_length - bps.target_offset)
                   return PATCH_TARGET_INVALID;
-               while (_len--)
+               /* TARGET_COPY may deliberately overlap its own output
+                * (an LZ-style repeating run), which memcpy cannot
+                * express; only non-overlapping spans take the bulk
+                * path. */
+               if (bps.output_offset - bps.target_offset >= _len)
                {
-                  uint8_t data = bps.target_data[bps.target_offset++];
-                  bps.target_data[bps.output_offset++] = data;
-                  bps.target_checksum = ~(encoding_crc32(~bps.target_checksum, &data, 1));
+                  memcpy(bps.target_data + bps.output_offset,
+                         bps.target_data + bps.target_offset, _len);
+                  bps.output_offset += _len;
+                  bps.target_offset += _len;
+               }
+               else
+               {
+                  while (_len--)
+                     bps.target_data[bps.output_offset++] =
+                           bps.target_data[bps.target_offset++];
                }
                break;
             }
@@ -334,17 +368,27 @@ static enum patch_error bps_apply_patch(
    }
 
    for (i = 0; i < 32; i += 8)
-      modify_source_checksum |= bps_read(&bps) << i;
+      modify_source_checksum |= (uint32_t)bps_read(&bps) << i;
    for (i = 0; i < 32; i += 8)
-      modify_target_checksum |= bps_read(&bps) << i;
+      modify_target_checksum |= (uint32_t)bps_read(&bps) << i;
 
-   checksum = ~bps.modify_checksum;
+   /* The modify and target checksums are plain CRC-32s of byte
+    * spans that sit whole in memory - the patch bytes consumed so
+    * far and the target bytes emitted so far - so each is one fold
+    * here instead of a one-byte fold per byte moved, the same shape
+    * the source checksum below has always had.  The reader yields
+    * zeroes without advancing into the fold past modify_length, so
+    * the folded span is clamped the same way. */
+   checksum = encoding_crc32(0, bps.modify_data,
+         (bps.modify_offset < bps.modify_length)
+               ? bps.modify_offset : bps.modify_length);
    for (i = 0; i < 32; i += 8)
-      modify_modify_checksum |= bps_read(&bps) << i;
+      modify_modify_checksum |= (uint32_t)bps_read(&bps) << i;
 
    bps.source_checksum = encoding_crc32(0,
          bps.source_data, bps.source_length);
-   bps.target_checksum = ~bps.target_checksum;
+   bps.target_checksum = encoding_crc32(0,
+         bps.target_data, bps.output_offset);
 
    if (bps.source_checksum != modify_source_checksum)
       return PATCH_SOURCE_CHECKSUM_INVALID;
@@ -360,56 +404,87 @@ static enum patch_error bps_apply_patch(
    return PATCH_SUCCESS;
 }
 
+/* The rolling per-byte checksums that used to live in these readers
+ * are gone: every UPS checksum covers a byte span that sits whole in
+ * memory, so each is folded in one call at the point it is compared.
+ * The readers keep their exact bounds behaviour - reads past the end
+ * yield zeroes, the patch and source cursors only advance in bounds,
+ * and the target cursor counts on past the end while writes stop. */
 static uint8_t ups_patch_read(struct ups_data *data)
 {
    if (data && data->patch_offset < data->patch_length)
-   {
-      uint8_t n = data->patch_data[data->patch_offset++];
-      data->patch_checksum =
-         ~(encoding_crc32(~data->patch_checksum, &n, 1));
-      return n;
-   }
+      return data->patch_data[data->patch_offset++];
    return 0x00;
 }
 
 static uint8_t ups_source_read(struct ups_data *data)
 {
    if (data && data->source_offset < data->source_length)
-   {
-      uint8_t n = data->source_data[data->source_offset++];
-      data->source_checksum =
-         ~(encoding_crc32(~data->source_checksum, &n, 1));
-      return n;
-   }
+      return data->source_data[data->source_offset++];
    return 0x00;
 }
 
 static void ups_target_write(struct ups_data *data, uint8_t n)
 {
    if (data->target_offset < data->target_length)
-   {
       data->target_data[data->target_offset] = n;
-      data->target_checksum =
-         ~(encoding_crc32(~data->target_checksum, &n, 1));
-   }
    data->target_offset++;
 }
 
-static uint64_t ups_decode(struct ups_data *data)
+/* Copy n bytes source -> target in bulk with the byte loop's exact
+ * cursor semantics: the source cursor stops at source_length and
+ * yields zeroes, the target cursor counts all n on while only
+ * in-bounds bytes land.  This replaces the one-call-per-byte walks
+ * for the skip runs and the end-of-patch drains, which cover the
+ * whole unchanged remainder of the file. */
+static void ups_copy_run(struct ups_data *data, size_t n)
+{
+   size_t s_take = 0, t_room = 0, m;
+   if (data->source_offset < data->source_length)
+      s_take = data->source_length - data->source_offset;
+   if (s_take > n)
+      s_take = n;
+   if (data->target_offset < data->target_length)
+      t_room = data->target_length - data->target_offset;
+   if (t_room > n)
+      t_room = n;
+   m = (s_take < t_room) ? s_take : t_room;
+   memcpy(data->target_data + data->target_offset,
+          data->source_data + data->source_offset, m);
+   if (t_room > s_take)
+      memset(data->target_data + data->target_offset + s_take,
+             0, t_room - s_take);
+   data->source_offset += (unsigned)s_take;
+   data->target_offset += (unsigned)n;
+}
+
+static bool ups_decode(struct ups_data *data, uint64_t *out)
 {
    uint64_t offset = 0, shift = 1;
 
    for (;;)
    {
-      uint8_t x = ups_patch_read(data);
+      uint8_t x;
+
+      if (data->patch_offset >= data->patch_length)
+         return false;
+      x = data->patch_data[data->patch_offset++];
+      if ((uint64_t)(x & 0x7f) > (UINT64_MAX - offset) / shift)
+         return false;
       offset   += (x & 0x7f) * shift;
 
       if (x & 0x80)
-         break;
+      {
+         *out = offset;
+         return true;
+      }
+      if (shift > UINT64_MAX >> 7)
+         return false;
       shift <<= 7;
+      if (offset > UINT64_MAX - shift)
+         return false;
       offset += shift;
    }
-   return offset;
 }
 
 static enum patch_error ups_apply_patch(
@@ -419,6 +494,8 @@ static enum patch_error ups_apply_patch(
 {
    size_t i;
    struct ups_data data;
+   uint64_t decoded_source_length;
+   uint64_t decoded_target_length;
    unsigned source_read_length;
    unsigned target_read_length;
    uint32_t patch_result_checksum = 0;
@@ -435,9 +512,8 @@ static enum patch_error ups_apply_patch(
    data.patch_offset    = 0;
    data.source_offset   = 0;
    data.target_offset   = 0;
-   data.patch_checksum  = ~0;
-   data.source_checksum = ~0;
-   data.target_checksum = ~0;
+   data.source_checksum = 0;
+   data.target_checksum = 0;
 
    if (data.patch_length < 18)
       return PATCH_PATCH_INVALID;
@@ -450,8 +526,13 @@ static enum patch_error ups_apply_patch(
       )
       return PATCH_PATCH_INVALID;
 
-   source_read_length = (unsigned)ups_decode(&data);
-   target_read_length = (unsigned)ups_decode(&data);
+   if (   !ups_decode(&data, &decoded_source_length)
+       || !ups_decode(&data, &decoded_target_length)
+       || decoded_source_length > UINT_MAX
+       || decoded_target_length > UINT_MAX)
+      return PATCH_PATCH_INVALID;
+   source_read_length = (unsigned)decoded_source_length;
+   target_read_length = (unsigned)decoded_target_length;
 
    if (     (data.source_length != source_read_length)
          && (data.source_length != target_read_length))
@@ -474,9 +555,13 @@ static enum patch_error ups_apply_patch(
 
    while (data.patch_offset < data.patch_length - 12)
    {
-      unsigned __len = (unsigned)ups_decode(&data);
-      while (__len--)
-         ups_target_write(&data, ups_source_read(&data));
+      uint64_t decoded_len;
+      unsigned __len;
+
+      if (!ups_decode(&data, &decoded_len) || decoded_len > UINT_MAX)
+         return PATCH_PATCH_INVALID;
+      __len = (unsigned)decoded_len;
+      ups_copy_run(&data, __len);
 
       for (;;)
       {
@@ -487,22 +572,26 @@ static enum patch_error ups_apply_patch(
       }
    }
 
-   while (data.source_offset < data.source_length)
-      ups_target_write(&data, ups_source_read(&data));
-   while (data.target_offset < data.target_length)
-      ups_target_write(&data, ups_source_read(&data));
+   if (data.source_offset < data.source_length)
+      ups_copy_run(&data, data.source_length - data.source_offset);
+   if (data.target_offset < data.target_length)
+      ups_copy_run(&data, data.target_length - data.target_offset);
 
    for (i = 0; i < 4; i++)
-      source_read_checksum |= ups_patch_read(&data) << (i * 8);
+      source_read_checksum |= (uint32_t)ups_patch_read(&data) << (i * 8);
    for (i = 0; i < 4; i++)
-      target_read_checksum |= ups_patch_read(&data) << (i * 8);
+      target_read_checksum |= (uint32_t)ups_patch_read(&data) << (i * 8);
 
-   patch_result_checksum = ~data.patch_checksum;
-   data.source_checksum  = ~data.source_checksum;
-   data.target_checksum  = ~data.target_checksum;
+   patch_result_checksum = encoding_crc32(0,
+         data.patch_data, data.patch_offset);
+   data.source_checksum  = encoding_crc32(0,
+         data.source_data, data.source_offset);
+   data.target_checksum  = encoding_crc32(0, data.target_data,
+         (data.target_offset < data.target_length)
+               ? data.target_offset : data.target_length);
 
    for (i = 0; i < 4; i++)
-      patch_read_checksum |= ups_patch_read(&data) << (i * 8);
+      patch_read_checksum |= (uint32_t)ups_patch_read(&data) << (i * 8);
 
    if (patch_result_checksum != patch_read_checksum)
       return PATCH_PATCH_INVALID;
