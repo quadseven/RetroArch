@@ -18,6 +18,7 @@
 
 /* Defined below; used by init before its definition. */
 static void otlp_write_status(const char *fmt, ...);
+static void otlp_enqueue(int severity, const char *source, const char *line);
 #include "file_path_special.h"
 
 #ifdef __SWITCH__
@@ -535,12 +536,72 @@ static void otlp_worker(void *unused)
             otlp_metrics_url(murl, sizeof(murl));
             if (!otlp_post_to(murl, m))
             {
+               unsigned nfail;
+               char err[192];
+
                slock_lock(otlp_st.lock);
-               otlp_st.stat_metric_failures++;
+               nfail = ++otlp_st.stat_metric_failures;
+               strlcpy(err, otlp_st.last_error, sizeof(err));
                slock_unlock(otlp_st.lock);
+
+               /*
+                * Reported through the log path, which is the one channel known
+                * to reach the backend from this console.
+                *
+                * The counter this increments existed for a whole release and
+                * was never printed anywhere, so a metrics outage was invisible
+                * from the card AND from the backend. Writing it to a status
+                * file alone would not have helped either: that file is written
+                * at init and at deinit, and a frozen or crashed RetroArch
+                * reaches neither.
+                *
+                * First failure and then every 20th, because if the endpoint is
+                * unreachable this fires every cycle and a diagnostic that
+                * floods the very transport it is complaining about is not a
+                * diagnostic.
+                */
+               if (nfail == 1 || (nfail % 20) == 0)
+               {
+                  char line[320];
+
+                  /* Both fields bounded explicitly. murl is 576 bytes and err
+                   * 192, which cannot both fit; letting snprintf truncate at
+                   * the end would drop last_error entirely, and last_error is
+                   * the field that says why. */
+                  snprintf(line, sizeof(line),
+                        "[OTLP] metrics POST failed (%u so far) url=%.120s"
+                        " last_error=%.120s",
+                        nfail, murl, err[0] ? err : "none");
+                  otlp_enqueue(13 /* WARN */, "OTLP", line);
+               }
             }
             free(m);
          }
+      }
+
+      /* Refreshed every cycle, not only at init and at deinit.
+       *
+       * This file previously read "started, endpoint=..." from launch until a
+       * clean shutdown. A frozen or crashed RetroArch reaches neither end, so
+       * the one situation where the card is the only diagnostic left is exactly
+       * the situation where the file says nothing. One small write per flush
+       * interval buys a card that always reflects the last completed cycle.
+       *
+       * metric_failures is here because the counter behind it was added, wired
+       * to increment, and then never printed anywhere at all. */
+      {
+         unsigned acc, snt, drp, fail, mfail;
+
+         slock_lock(otlp_st.lock);
+         acc   = otlp_st.stat_accepted;
+         snt   = otlp_st.stat_sent;
+         drp   = otlp_st.stat_dropped;
+         fail  = otlp_st.stat_failures;
+         mfail = otlp_st.stat_metric_failures;
+         slock_unlock(otlp_st.lock);
+
+         otlp_write_status("running accepted=%u sent=%u dropped=%u failures=%u"
+               " metric_failures=%u", acc, snt, drp, fail, mfail);
       }
 
       if (n > 0)
