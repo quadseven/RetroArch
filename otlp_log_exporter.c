@@ -515,69 +515,18 @@ static void otlp_worker(void *unused)
       slock_unlock(otlp_st.lock);
 
       /*
-       * Metrics ship before the empty-batch check, and unconditionally.
+       * Status first, then logs, then metrics. Order is the fix.
        *
-       * Sharing this worker was meant to share the network's schedule, not to
-       * make one signal conditional on another. A quiet interval where nothing
-       * logged is exactly when a core is running normally, and that is when the
-       * frame numbers matter most. Gated behind an empty log batch they would
-       * disappear whenever things were going well.
+       * Metrics used to run first, which put a POST that can block ahead of
+       * both the log flush and the status write in the same thread. If
+       * /v1/metrics hangs in net_http, that arrangement takes the whole
+       * exporter down and silences the two things that would have reported it:
+       * a console spent an entire session with logs stopping dead after the
+       * startup burst and otel-status.txt frozen at "started".
+       *
+       * An optional signal must never be able to block the mandatory one.
        */
-      {
-         char *m;
 
-         otlp_metrics_sample_video();
-         otlp_metrics_sample_process();
-
-         if ((m = otlp_metrics_build_payload(otlp_st.resource_attrs)))
-         {
-            char murl[576];
-
-            otlp_metrics_url(murl, sizeof(murl));
-            if (!otlp_post_to(murl, m))
-            {
-               unsigned nfail;
-               char err[192];
-
-               slock_lock(otlp_st.lock);
-               nfail = ++otlp_st.stat_metric_failures;
-               strlcpy(err, otlp_st.last_error, sizeof(err));
-               slock_unlock(otlp_st.lock);
-
-               /*
-                * Reported through the log path, which is the one channel known
-                * to reach the backend from this console.
-                *
-                * The counter this increments existed for a whole release and
-                * was never printed anywhere, so a metrics outage was invisible
-                * from the card AND from the backend. Writing it to a status
-                * file alone would not have helped either: that file is written
-                * at init and at deinit, and a frozen or crashed RetroArch
-                * reaches neither.
-                *
-                * First failure and then every 20th, because if the endpoint is
-                * unreachable this fires every cycle and a diagnostic that
-                * floods the very transport it is complaining about is not a
-                * diagnostic.
-                */
-               if (nfail == 1 || (nfail % 20) == 0)
-               {
-                  char line[320];
-
-                  /* Both fields bounded explicitly. murl is 576 bytes and err
-                   * 192, which cannot both fit; letting snprintf truncate at
-                   * the end would drop last_error entirely, and last_error is
-                   * the field that says why. */
-                  snprintf(line, sizeof(line),
-                        "[OTLP] metrics POST failed (%u so far) url=%.120s"
-                        " last_error=%.120s",
-                        nfail, murl, err[0] ? err : "none");
-                  otlp_enqueue(13 /* WARN */, "OTLP", line);
-               }
-            }
-            free(m);
-         }
-      }
 
       /* Refreshed every cycle, not only at init and at deinit.
        *
@@ -647,6 +596,71 @@ static void otlp_worker(void *unused)
             otlp_st.stat_failures++;
          }
          slock_unlock(otlp_st.lock);
+      }
+
+      /*
+       * Metrics ship before the empty-batch check, and unconditionally.
+       *
+       * Sharing this worker was meant to share the network's schedule, not to
+       * make one signal conditional on another. A quiet interval where nothing
+       * logged is exactly when a core is running normally, and that is when the
+       * frame numbers matter most. Gated behind an empty log batch they would
+       * disappear whenever things were going well.
+       */
+      {
+         char *m;
+
+         otlp_metrics_sample_video();
+         otlp_metrics_sample_process();
+
+         if ((m = otlp_metrics_build_payload(otlp_st.resource_attrs)))
+         {
+            char murl[576];
+
+            otlp_metrics_url(murl, sizeof(murl));
+            if (!otlp_post_to(murl, m))
+            {
+               unsigned nfail;
+               char err[192];
+
+               slock_lock(otlp_st.lock);
+               nfail = ++otlp_st.stat_metric_failures;
+               strlcpy(err, otlp_st.last_error, sizeof(err));
+               slock_unlock(otlp_st.lock);
+
+               /*
+                * Reported through the log path, which is the one channel known
+                * to reach the backend from this console.
+                *
+                * The counter this increments existed for a whole release and
+                * was never printed anywhere, so a metrics outage was invisible
+                * from the card AND from the backend. Writing it to a status
+                * file alone would not have helped either: that file is written
+                * at init and at deinit, and a frozen or crashed RetroArch
+                * reaches neither.
+                *
+                * First failure and then every 20th, because if the endpoint is
+                * unreachable this fires every cycle and a diagnostic that
+                * floods the very transport it is complaining about is not a
+                * diagnostic.
+                */
+               if (nfail == 1 || (nfail % 20) == 0)
+               {
+                  char line[320];
+
+                  /* Both fields bounded explicitly. murl is 576 bytes and err
+                   * 192, which cannot both fit; letting snprintf truncate at
+                   * the end would drop last_error entirely, and last_error is
+                   * the field that says why. */
+                  snprintf(line, sizeof(line),
+                        "[OTLP] metrics POST failed (%u so far) url=%.120s"
+                        " last_error=%.120s",
+                        nfail, murl, err[0] ? err : "none");
+                  otlp_enqueue(13 /* WARN */, "OTLP", line);
+               }
+            }
+            free(m);
+         }
       }
    }
 }
